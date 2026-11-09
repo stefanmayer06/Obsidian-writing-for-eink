@@ -1,0 +1,910 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ink Notebook promo</title>
+<style>
+  :root {
+    --bg: #0f0f11;
+    --ink: #141416;
+    --text: #f5f1e8;
+    --soft: #b4afa4;
+    --faint: #6f6b63;
+    --marker: #ffe14d;
+  }
+  html, body { margin: 0; background: var(--bg); }
+  #stage { position: relative; width: 1080px; height: 1350px; overflow: hidden; font-family: "Inter", sans-serif; color: var(--text); }
+  canvas { position: absolute; left: 0; top: 0; }
+
+  /* the eyebrow: the feature counter and the name */
+  .eyebrow { position: absolute; left: 56px; top: 44px; display: flex; align-items: center; gap: 16px; will-change: opacity; }
+  .eyebrow .num { position: relative; height: 40px; min-width: 64px; padding: 0 12px; box-sizing: border-box; border-radius: 10px; background: var(--marker); color: var(--ink); font: 900 26px/40px "Inter Display", "Inter", sans-serif; text-align: center; overflow: hidden; letter-spacing: 0.02em; }
+  .eyebrow .num span { display: block; will-change: transform; }
+  .eyebrow .name { font: 700 19px/1 "Inter", sans-serif; letter-spacing: 0.24em; color: var(--faint); }
+  .eyebrow .name b { color: var(--soft); font-weight: 800; }
+
+  .cap { position: absolute; left: 56px; right: 40px; top: 104px; will-change: opacity, transform; }
+  .cap .main { font: 900 92px/1.02 "Inter Display", "Inter", sans-serif; letter-spacing: -0.035em; word-spacing: 0.06em; white-space: nowrap; }
+  .cap .w { display: inline-block; will-change: transform, opacity; }
+  .cap .mk { position: relative; display: inline-block; z-index: 0; }
+  .cap .mk::before { content: ""; position: absolute; z-index: -1; left: -0.07em; right: -0.07em; top: 0.1em; bottom: 0.02em; background: var(--marker); border-radius: 0.1em 0.28em 0.14em 0.3em / 0.2em 0.3em 0.24em 0.2em; transform: scaleX(var(--mk, 0)) skewX(-6deg); transform-origin: left center; }
+  .cap .sub { margin-top: 18px; font: 500 33px/1.25 "Inter", sans-serif; color: var(--soft); white-space: nowrap; will-change: opacity, transform; }
+  .cap .sub .tick { color: var(--marker); font-weight: 700; }
+  .foot { position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); padding: 10px 20px; border-radius: 999px; background: rgba(15, 15, 17, 0.86); border: 1px solid rgba(255, 255, 255, 0.12); font: 500 21px/1.2 "Inter", sans-serif; color: var(--soft); white-space: nowrap; }
+
+  /* the end card */
+  #end { position: absolute; inset: 0; pointer-events: none; color: var(--ink); }
+  #end .fx { position: absolute; left: 0; right: 0; text-align: center; will-change: opacity, transform; }
+  #end .e-eyebrow { top: 132px; font: 800 22px/1 "Inter", sans-serif; letter-spacing: 0.3em; color: rgba(20, 20, 22, 0.62); }
+  #end .e-tag { top: 560px; font: 600 40px/1.28 "Inter", sans-serif; color: rgba(20, 20, 22, 0.78); }
+  #end .e-tag b { color: var(--ink); font-weight: 800; }
+  #end .chips { top: 700px; display: flex; justify-content: center; gap: 14px; }
+  #end .chip { padding: 13px 22px; border-radius: 999px; border: 3px solid var(--ink); font: 700 26px/1 "Inter", sans-serif; background: rgba(255, 255, 255, 0.35); }
+  #end .cta { left: 84px; right: 84px; top: 818px; padding: 34px 30px 38px; border-radius: 30px; background: var(--ink); color: #fff; box-shadow: 0 22px 50px rgba(60, 45, 0, 0.28); }
+  #end .cta .k { font: 700 22px/1 "Inter", sans-serif; letter-spacing: 0.28em; color: #9d998f; }
+  #end .cta .v { margin-top: 18px; font: 800 40px/1.25 "Inter Display", "Inter", sans-serif; letter-spacing: -0.01em; }
+  #end .cta .v .q { color: var(--marker); }
+  #end .url { top: 1140px; font: 600 25px/1.45 "Inter", sans-serif; color: rgba(20, 20, 22, 0.7); }
+  #end .url b { color: var(--ink); font-weight: 800; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="cv" width="1080" height="1350"></canvas>
+  <div class="eyebrow" id="eyebrow"><div class="num"><span id="num">01</span></div><div class="name">INK NOTEBOOK <b>·</b> OBSIDIAN PLUGIN</div></div>
+  <div id="caps"></div>
+  <div class="foot" id="foot" hidden></div>
+  <div id="end" hidden>
+    <div class="fx e-eyebrow" id="e1">FREE PLUGIN FOR OBSIDIAN</div>
+    <div class="fx e-tag" id="e2">Your handwriting, in your vault.<br><b>Made for e‑ink tablets.</b></div>
+    <div class="fx chips" id="e3"><span class="chip">Free &amp; open source</span><span class="chip">No account</span><span class="chip">Works offline</span></div>
+    <div class="fx cta" id="e4"><div class="k">GET IT</div><div class="v">Community plugins → Browse →<br><span class="q">“Ink Notebook”</span></div></div>
+    <div class="fx url" id="e5">Open source on GitHub<br><b>github.com/stefanmayer06/Obsidian-writing-for-eink</b></div>
+  </div>
+</div>
+<script type="module">
+import { build, cameraAt, frameOf, CAPTIONS, CLIPS, FPS, BEAT, VIDEO, SCREEN, WALL, PAPER_NAMES, TRANSITION } from "./timeline.mjs";
+
+const cv = document.getElementById("cv");
+const main = cv.getContext("2d");
+let ctx = main;
+const BASE = 1.0; // CSS px of the tablet's screen → video px at zoom 1
+const CENTRE = { x: VIDEO.w / 2, y: 826 };
+const BEZEL = 30;
+const MARKER = "#ffe14d";
+
+let T = null; // the built timeline
+let manifests = null;
+let title = null; // the handwritten "Ink Notebook": strokes in video px
+const clipById = {};
+const clipIndex = {};
+
+// ------------------------------------------------------------ images
+const cache = new Map();
+function img(file) {
+  let e = cache.get(file);
+  if (!e) {
+    const im = new Image();
+    im.src = `../shots/promo/${file}`;
+    e = { im, ready: im.decode().then(() => im) };
+    cache.set(file, e);
+    if (cache.size > 60) cache.delete(cache.keys().next().value);
+  }
+  return e.ready;
+}
+
+// ------------------------------------------------------------ helpers
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const ease = (u) => { u = clamp(u); return u * u * (3 - 2 * u); };
+const easeOut = (u) => 1 - Math.pow(1 - clamp(u), 3);
+const easeInOut = (u) => { u = clamp(u); return u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2; };
+
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
+}
+
+// ------------------------------------------------------------ the background: a dark studio, a soft light behind the tablet, grain
+const bg = document.createElement("canvas");
+bg.width = VIDEO.w;
+bg.height = VIDEO.h;
+{
+  const g = bg.getContext("2d");
+  const lin = g.createLinearGradient(0, 0, 0, VIDEO.h);
+  lin.addColorStop(0, "#0f0f11");
+  lin.addColorStop(1, "#141417");
+  g.fillStyle = lin;
+  g.fillRect(0, 0, VIDEO.w, VIDEO.h);
+  const spot = g.createRadialGradient(VIDEO.w / 2, 860, 60, VIDEO.w / 2, 860, 760);
+  spot.addColorStop(0, "rgba(255, 236, 190, 0.16)");
+  spot.addColorStop(0.5, "rgba(255, 236, 190, 0.05)");
+  spot.addColorStop(1, "rgba(255, 236, 190, 0)");
+  g.fillStyle = spot;
+  g.fillRect(0, 0, VIDEO.w, VIDEO.h);
+  // a faint dot grid, like dotted paper in the dark
+  g.fillStyle = "rgba(255, 255, 255, 0.045)";
+  for (let y = 24; y < VIDEO.h; y += 40) for (let x = 20; x < VIDEO.w; x += 40) {
+    g.beginPath();
+    g.arc(x, y, 1.5, 0, Math.PI * 2);
+    g.fill();
+  }
+}
+const grains = [0, 1, 2, 3].map((s) => {
+  const c = document.createElement("canvas");
+  c.width = 540;
+  c.height = 675;
+  const g = c.getContext("2d");
+  const d = g.createImageData(c.width, c.height);
+  let a = 1234567 + s * 7919;
+  for (let i = 0; i < d.data.length; i += 4) {
+    a = (a * 1103515245 + 12345) >>> 0;
+    const v = (a >>> 24) & 255;
+    d.data[i] = d.data[i + 1] = d.data[i + 2] = v;
+    d.data[i + 3] = 255;
+  }
+  g.putImageData(d, 0, 0);
+  return c;
+});
+function drawGrain(f, alpha = 0.035) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.globalCompositeOperation = "overlay";
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(grains[f % grains.length], 0, 0, VIDEO.w, VIDEO.h);
+  ctx.restore();
+}
+
+// ------------------------------------------------------------ the camera: screen (CSS px) → video px
+/** The first TRANSITION frames of a clip that flows in from the clip before: how far along it is. */
+function transitionAt(f) {
+  const fr = T.frames[f];
+  const c = clipById[fr.clip];
+  if (c.in !== "fade" || c.start === 0 || fr.local >= TRANSITION) return null;
+  const prevF = T.frames[c.start - 1];
+  const u = (fr.local + 1) / (TRANSITION + 1);
+  return { u, e: easeInOut(u), prevF, prevClip: clipById[prevF.clip] };
+}
+
+function clipCam(clip, local) {
+  const cam = cameraAt(clip.camera, local / BEAT);
+  return { z: cam.z, x: cam.x, y: cam.y, r: cam.r ?? 0 };
+}
+
+function camOf(f) {
+  const fr = T.frames[f];
+  let cam = clipCam(clipById[fr.clip], fr.local);
+  // across a transition the camera glides from where the last clip ended, pulling back a little on the way
+  const tr = transitionAt(f);
+  if (tr) {
+    const a = clipCam(tr.prevClip, tr.prevClip.frames - 1);
+    const e = tr.e;
+    const z = Math.exp(Math.log(a.z) + (Math.log(cam.z) - Math.log(a.z)) * e) * (1 - 0.1 * Math.sin(Math.PI * e));
+    cam = { z, x: a.x + (cam.x - a.x) * e, y: a.y + (cam.y - a.y) * e, r: a.r + (cam.r - a.r) * e };
+  }
+  return { ...cam, s: BASE * cam.z, rad: (cam.r * Math.PI) / 180 };
+}
+function mapper(cam, extra = { k: 1, dx: 0, dy: 0, rot: 0 }) {
+  const s = cam.s * extra.k;
+  const a = cam.rad + (extra.rot ?? 0);
+  const cos = Math.cos(a), sin = Math.sin(a);
+  const ox = CENTRE.x + (extra.dx ?? 0), oy = CENTRE.y + (extra.dy ?? 0);
+  return {
+    s, a,
+    pt: (x, y) => {
+      const u = (x - cam.x) * s, v = (y - cam.y) * s;
+      return { x: ox + u * cos - v * sin, y: oy + u * sin + v * cos };
+    },
+    apply: (c) => c.setTransform(s * cos, s * sin, -s * sin, s * cos, ox - (cam.x * s * cos - cam.y * s * sin), oy - (cam.x * s * sin + cam.y * s * cos)),
+  };
+}
+
+// ------------------------------------------------------------ the tablet
+function drawTablet(M, screen, alpha = 1) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  M.apply(ctx);
+  const x0 = -BEZEL, y0 = -BEZEL, w = SCREEN.w + 2 * BEZEL, h = SCREEN.h + 2 * BEZEL;
+  // shadow and the light around it
+  ctx.save();
+  ctx.shadowColor = "rgba(0, 0, 0, 0.6)";
+  ctx.shadowBlur = 80 * M.s;
+  ctx.shadowOffsetY = 30 * M.s;
+  roundRect(ctx, x0, y0, w, h, 40);
+  ctx.fillStyle = "#1b1c20";
+  ctx.fill();
+  ctx.restore();
+  const body = ctx.createLinearGradient(x0, y0, x0 + w, y0 + h);
+  body.addColorStop(0, "#43454c");
+  body.addColorStop(0.45, "#2b2c31");
+  body.addColorStop(1, "#1d1e22");
+  roundRect(ctx, x0, y0, w, h, 40);
+  ctx.fillStyle = body;
+  ctx.fill();
+  // rim light
+  ctx.lineWidth = 2 / M.s;
+  const rim = ctx.createLinearGradient(x0, y0, x0 + w * 0.6, y0 + h);
+  rim.addColorStop(0, "rgba(255,255,255,0.38)");
+  rim.addColorStop(0.5, "rgba(255,255,255,0.08)");
+  rim.addColorStop(1, "rgba(255,255,255,0.18)");
+  ctx.strokeStyle = rim;
+  roundRect(ctx, x0 + 1, y0 + 1, w - 2, h - 2, 39);
+  ctx.stroke();
+  // the screen
+  ctx.save();
+  roundRect(ctx, 0, 0, SCREEN.w, SCREEN.h, 6);
+  ctx.clip();
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, SCREEN.w, SCREEN.h);
+  screen();
+  // a little depth under the glass
+  const ins = ctx.createLinearGradient(0, 0, 0, 10);
+  ins.addColorStop(0, "rgba(0,0,0,0.12)");
+  ins.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = ins;
+  ctx.fillRect(0, 0, SCREEN.w, 10);
+  // glass: a very soft sheen
+  const sheen = ctx.createLinearGradient(0, 0, SCREEN.w, SCREEN.h);
+  sheen.addColorStop(0, "rgba(255,255,255,0.05)");
+  sheen.addColorStop(0.35, "rgba(255,255,255,0)");
+  ctx.fillStyle = sheen;
+  ctx.fillRect(0, 0, SCREEN.w, SCREEN.h);
+  ctx.restore();
+  ctx.restore();
+}
+
+function drawShot(im, a = 1, filter = "none") {
+  const wasA = ctx.globalAlpha;
+  ctx.globalAlpha = wasA * a;
+  ctx.filter = filter;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(im, 0, 0, SCREEN.w, SCREEN.h);
+  ctx.filter = "none";
+  ctx.globalAlpha = wasA;
+}
+
+// ------------------------------------------------------------ the stylus (tip at the origin, the body along +y)
+const PEN_LEN = 360;
+function penOutline(c) {
+  c.beginPath();
+  c.moveTo(-0.8, 0);
+  c.lineTo(-2.4, 9);
+  c.lineTo(-10.5, 52);
+  c.lineTo(-11, PEN_LEN - 26);
+  c.quadraticCurveTo(-11, PEN_LEN, 0, PEN_LEN + 1);
+  c.quadraticCurveTo(11, PEN_LEN, 11, PEN_LEN - 26);
+  c.lineTo(10.5, 52);
+  c.lineTo(2.4, 9);
+  c.lineTo(0.8, 0);
+  c.closePath();
+}
+
+function drawPen(x, y, k, lift, alpha, ang = -0.52) {
+  if (alpha <= 0.01) return;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = alpha;
+  // the shadow falls to the lower right and leaves the tip as the pen lifts
+  ctx.save();
+  ctx.translate(x + (5 + 18 * lift) * k, y + (6 + 22 * lift) * k);
+  ctx.rotate(ang - 0.1);
+  ctx.scale(k, k);
+  ctx.filter = `blur(${(5 + 7 * lift) * k}px)`;
+  penOutline(ctx);
+  ctx.fillStyle = `rgba(0, 0, 0, ${0.34 - 0.12 * lift})`;
+  ctx.fill();
+  ctx.restore();
+  // the pen: a warm white body, a graphite cone, a yellow ring
+  ctx.translate(x - 3 * lift * k, y - 6 * lift * k);
+  ctx.rotate(ang);
+  ctx.scale(k * (1 + 0.03 * lift), k * (1 + 0.03 * lift));
+  penOutline(ctx);
+  const body = ctx.createLinearGradient(-12, 0, 12, 0);
+  body.addColorStop(0, "#fbfaf6");
+  body.addColorStop(0.35, "#ecebe5");
+  body.addColorStop(0.7, "#c9c7bf");
+  body.addColorStop(1, "#9c9a92");
+  ctx.fillStyle = body;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(-2.4, 9);
+  ctx.lineTo(-10.5, 52);
+  ctx.lineTo(10.5, 52);
+  ctx.lineTo(2.4, 9);
+  ctx.closePath();
+  const cone = ctx.createLinearGradient(-11, 0, 11, 0);
+  cone.addColorStop(0, "#5a5d63");
+  cone.addColorStop(0.45, "#36383d");
+  cone.addColorStop(1, "#1d1e21");
+  ctx.fillStyle = cone;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(-0.8, 0);
+  ctx.lineTo(-2.4, 9.5);
+  ctx.lineTo(2.4, 9.5);
+  ctx.lineTo(0.8, 0);
+  ctx.closePath();
+  ctx.fillStyle = "#111";
+  ctx.fill();
+  ctx.fillStyle = MARKER;
+  ctx.fillRect(-10.8, 52, 21.6, 6);
+  ctx.strokeStyle = "rgba(255,255,255,0.75)";
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(-6.5, 70);
+  ctx.lineTo(-7, PEN_LEN - 30);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawTapRing(x, y, k, age) {
+  const u = age / 11;
+  if (u < 0 || u > 1) return;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.strokeStyle = `rgba(255, 225, 77, ${0.9 * (1 - u)})`;
+  ctx.lineWidth = 4 * k * (1 - 0.5 * u);
+  ctx.beginPath();
+  ctx.arc(x, y, (8 + 34 * easeOut(u)) * k, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawFinger(x, y, k, alpha) {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = alpha;
+  const g = ctx.createRadialGradient(x, y, 0, x, y, 46 * k);
+  g.addColorStop(0, "rgba(255, 255, 255, 0.55)");
+  g.addColorStop(0.6, "rgba(255, 255, 255, 0.25)");
+  g.addColorStop(1, "rgba(255, 255, 255, 0)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(x, y, 46 * k, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(30, 30, 32, 0.55)";
+  ctx.lineWidth = 3 * k;
+  ctx.beginPath();
+  ctx.arc(x, y, 26 * k, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ------------------------------------------------------------ captions
+const capsEl = document.getElementById("caps");
+const capEls = [];
+function makeCaptions() {
+  for (const c of CAPTIONS) {
+    const el = document.createElement("div");
+    el.className = "cap";
+    if (c.main) {
+      const mainEl = document.createElement("div");
+      mainEl.className = "main";
+      // words that slide in one after the other; the marked part gets the highlighter
+      const parts = [];
+      const i = c.mark ? c.main.indexOf(c.mark) : -1;
+      if (i >= 0) {
+        if (i > 0) parts.push({ t: c.main.slice(0, i) });
+        parts.push({ t: c.mark, mk: true });
+        if (i + c.mark.length < c.main.length) parts.push({ t: c.main.slice(i + c.mark.length) });
+      } else parts.push({ t: c.main });
+      for (const p of parts) {
+        for (const word of p.t.split(/(\s+)/)) {
+          if (!word) continue;
+          if (/^\s+$/.test(word)) {
+            mainEl.append(" ");
+            continue;
+          }
+          const w = document.createElement("span");
+          w.className = p.mk ? "w mk" : "w";
+          w.textContent = word;
+          mainEl.append(w);
+        }
+      }
+      const sub = document.createElement("div");
+      sub.className = "sub";
+      sub.innerHTML = (c.sub ?? "").replace(/·/g, '<span class="tick">·</span>');
+      el.append(mainEl, sub);
+    }
+    el.style.opacity = "0";
+    capsEl.append(el);
+    capEls.push(el);
+  }
+}
+
+/** When caption i shows: [start, end) in seconds. */
+function capSpan(i) {
+  const c = CAPTIONS[i];
+  const start = (clipById[c.clip].start + c.at * BEAT) / FPS;
+  const next = CAPTIONS[i + 1];
+  const end = next ? (clipById[next.clip].start + next.at * BEAT) / FPS : Infinity;
+  return [start, end];
+}
+
+function updateCaptions(t, f) {
+  CAPTIONS.forEach((c, i) => {
+    const el = capEls[i];
+    if (!c.main) return;
+    const [start, end] = capSpan(i);
+    const first = i === 0;
+    const vis = t >= start - 0.001 && t < end;
+    if (!vis) {
+      el.style.opacity = "0";
+      return;
+    }
+    const lt = t - start;
+    // it leaves upwards as the next one is about to come
+    const outU = easeInOut((t - (end - 0.24)) / 0.24);
+    el.style.opacity = String(1 - outU);
+    el.style.transform = `translateY(${-outU * 24}px)`;
+    const words = el.querySelectorAll(".w");
+    words.forEach((w, k) => {
+      const u = first ? 1 : easeOut((lt - 0.04 - 0.045 * k) / 0.42);
+      w.style.opacity = String(first ? 1 : clamp(u * 1.4));
+      w.style.transform = `translateY(${(1 - u) * 34}px)`;
+    });
+    const mkU = first ? 1 : easeInOut((lt - 0.3) / 0.36);
+    el.querySelectorAll(".mk").forEach((mk) => {
+      mk.style.setProperty("--mk", String(mkU));
+      mk.style.color = mkU > 0.55 ? "#141416" : "";
+    });
+    const sub = el.querySelector(".sub");
+    const su = first ? 1 : easeOut((lt - 0.22) / 0.42);
+    sub.style.opacity = String(su);
+    sub.style.transform = `translateY(${(1 - su) * 14}px)`;
+    if (c.ticker) {
+      // the name of the paper on the screen now
+      const fr = T.frames[f];
+      const name = fr.step ? PAPER_NAMES[fr.step] : PAPER_NAMES.picker;
+      if (sub.textContent !== name) sub.textContent = name;
+      if (fr.step) {
+        const pop = easeOut(fr.stepLocal / 4);
+        sub.style.transform = `translateY(${(1 - pop) * 8}px)`;
+        sub.style.color = "#ffe14d";
+      } else sub.style.color = "";
+    }
+  });
+  // the footnote of a clip
+  const foot = document.getElementById("foot");
+  const fr = T.frames[f];
+  const cap = CAPTIONS.find((c) => c.foot && c.clip === fr.clip);
+  foot.hidden = !cap;
+  if (cap) {
+    const c = clipById[cap.clip];
+    const st = c.start / FPS, en = (c.start + c.frames) / FPS;
+    foot.textContent = cap.foot;
+    foot.style.opacity = String(Math.min(easeOut((t - st - 0.45) / 0.4), 1 - easeInOut((t - en + 0.3) / 0.3)));
+  }
+}
+
+/** The counter: features shown so far. */
+function updateCounter(f) {
+  const fr = T.frames[f];
+  const c = clipById[fr.clip];
+  const num = document.getElementById("num");
+  const eyebrow = document.getElementById("eyebrow");
+  let n = c.count ?? 24;
+  let roll = 0;
+  if (fr.clip === "wall") {
+    // counts up with the tiles of the wall
+    n = Math.min(24, 14 + Math.floor(Math.max(0, fr.local - 6) / 2));
+  } else if (fr.local < 9 && clipIndex[fr.clip] > 0) roll = 1 - easeInOut(fr.local / 9);
+  // the smart clip shows two features, so does the lasso
+  const second = (id) => CAPTIONS.find((c, i) => c.clip === id && c.at > 0);
+  if ((fr.clip === "smart" || fr.clip === "lasso") && fr.local >= second(fr.clip).at * BEAT) {
+    n += 1;
+    const d = fr.local - second(fr.clip).at * BEAT;
+    if (d < 9) roll = 1 - easeInOut(d / 9);
+  }
+  const label = String(n).padStart(2, "0");
+  if (num.textContent !== label) num.textContent = label;
+  num.style.transform = `translateY(${roll * 40}px)`;
+  eyebrow.style.opacity = fr.clip === "end" ? "0" : "1";
+}
+
+// ------------------------------------------------------------ the pen over time
+function penAlpha(f) {
+  const fr = T.frames[f];
+  const c = clipById[fr.clip];
+  const tr = transitionAt(f);
+  let a = tr ? tr.e : 1;
+  // before a clip without the tablet's pen (the wall), it is put away
+  const next = T.clips[clipIndex[fr.clip] + 1];
+  if (!next || next.in !== "fade") a = Math.min(a, easeInOut((c.frames - fr.local) / 8));
+  return a;
+}
+
+function liftAt(f) {
+  let up = 0, n = 0;
+  for (let d = -2; d <= 2; d++) {
+    const fr = T.frames[f + d];
+    if (!fr || !fr.pen || fr.clip !== T.frames[f].clip) continue;
+    up += fr.pen.down ? 0 : 1;
+    n++;
+  }
+  return n ? up / n : 1;
+}
+
+// ------------------------------------------------------------ one frame of footage: the tablet, the pen
+async function drawFootage(f, { alpha = 1, extra = null, pen = true } = {}) {
+  const fr = T.frames[f];
+  const cam = camOf(f);
+  const M = mapper(cam, extra ?? undefined);
+  const im = await img(fr.file);
+  let screen = () => drawShot(im);
+  // flowing in from the last clip: its screen fades out under this one
+  const tr = transitionAt(f);
+  if (tr && tr.prevF.file) {
+    const from = await img(tr.prevF.file);
+    screen = () => {
+      drawShot(from);
+      drawShot(im, tr.e);
+    };
+  }
+  // a cut inside the clip cross-fades too
+  let cut = null;
+  for (let d = 0; d < 12; d++) {
+    const g = T.frames[f - d];
+    if (!g || g.clip !== fr.clip) break;
+    if (g.cut) {
+      if (d < g.cut.frames) cut = { ...g.cut, e: easeInOut((d + 1) / (g.cut.frames + 1)) };
+      break;
+    }
+  }
+  if (cut) {
+    const from = await img(cut.from);
+    screen = () => {
+      drawShot(from);
+      drawShot(im, cut.e);
+    };
+  }
+  drawTablet(M, screen, alpha);
+  if (!pen) return M;
+  // the pen and the fingers
+  const k = 0.95 * Math.pow(cam.z, 0.42);
+  // the last clip's pen fades out where it was
+  if (tr && tr.prevF.pen && tr.prevClip.pen) {
+    const p = M.pt(tr.prevF.pen.x, tr.prevF.pen.y);
+    drawPen(p.x, p.y, k, 1, alpha * (1 - tr.e), -0.52 + M.a);
+  }
+  if (fr.pen) {
+    let a = alpha * penAlpha(f);
+    if (cut && cut.fromPen) {
+      const p = M.pt(cut.fromPen.x, cut.fromPen.y);
+      drawPen(p.x, p.y, k, 1, alpha * (1 - cut.e), -0.52 + M.a);
+      a *= cut.e;
+    }
+    for (let d = 0; d < 11; d++) {
+      const g = T.frames[f - d];
+      if (g && g.tap && g.clip === fr.clip && g.pen) {
+        const p = M.pt(g.pen.x, g.pen.y);
+        drawTapRing(p.x, p.y, k, d);
+      }
+    }
+    const p = M.pt(fr.pen.x, fr.pen.y);
+    drawPen(p.x, p.y, k, liftAt(f), a, -0.52 + M.a);
+  }
+  if (fr.touch) for (const t of fr.touch) {
+    const p = M.pt(t.x, t.y);
+    drawFinger(p.x, p.y, k, alpha);
+  }
+  return M;
+}
+
+// ------------------------------------------------------------ the wall
+let wallTiles = [];
+const WALL_COLS = 4;
+const WALL_ROWS = 6;
+const WALL_BOX = { x: 44, y: 262, w: 992, h: 1050 };
+
+function tileRect(i) {
+  const col = i % WALL_COLS, row = Math.floor(i / WALL_COLS);
+  const gap = 16;
+  const w = (WALL_BOX.w - gap * (WALL_COLS - 1)) / WALL_COLS;
+  const h = (WALL_BOX.h - gap * (WALL_ROWS - 1)) / WALL_ROWS;
+  return { x: WALL_BOX.x + col * (w + gap), y: WALL_BOX.y + row * (h + gap), w, h };
+}
+
+/** When tile i lands (frames into the wall): a diagonal wave. */
+function tileDelay(i) {
+  return 4 + (Math.floor(i / WALL_COLS) + (i % WALL_COLS)) * 2.1 + (i % 2) * 0.6;
+}
+
+async function drawWall(lt, out = 0) {
+  // lt: frames into the wall; tiles land one after the other, in a diagonal wave
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  for (let i = 0; i < wallTiles.length; i++) {
+    const t = wallTiles[i];
+    const r = tileRect(i);
+    const col = i % WALL_COLS, row = Math.floor(i / WALL_COLS);
+    const delay = tileDelay(i);
+    const u = clamp((lt - delay) / 10);
+    if (u <= 0) continue;
+    const s = 0.86 + 0.14 * easeOut(u);
+    const im = await img(t.file);
+    ctx.save();
+    ctx.globalAlpha = easeOut(u) * (1 - out);
+    ctx.translate(r.x + r.w / 2, r.y + r.h / 2 + (1 - easeOut(u)) * 16);
+    ctx.scale(s, s);
+    ctx.translate(-r.w / 2, -r.h / 2);
+    // the card
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.45)";
+    ctx.shadowBlur = 18;
+    ctx.shadowOffsetY = 8;
+    roundRect(ctx, 0, 0, r.w, r.h, 14);
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+    ctx.restore();
+    ctx.save();
+    roundRect(ctx, 0, 0, r.w, r.h, 14);
+    ctx.clip();
+    const labelH = 30;
+    // the crop fills the card; the label sits on a band at its foot
+    const [cx, cy, cw, ch] = t.crop;
+    const k = Math.max(r.w / cw, r.h / ch);
+    const sw = r.w / k, sh = r.h / k;
+    const sx = cx + (cw - sw) / 2, sy = cy + (ch - sh) / 2;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(im, sx * 2, sy * 2, sw * 2, sh * 2, 0, 0, r.w, r.h);
+    const fade = ctx.createLinearGradient(0, r.h - labelH - 10, 0, r.h);
+    fade.addColorStop(0, "rgba(20,20,22,0)");
+    fade.addColorStop(0.3, "rgba(20,20,22,0.86)");
+    fade.addColorStop(1, "rgba(20,20,22,0.94)");
+    ctx.fillStyle = fade;
+    ctx.fillRect(0, r.h - labelH - 10, r.w, labelH + 10);
+    ctx.fillStyle = "#f5f1e8";
+    ctx.font = '700 19px "Inter", sans-serif';
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(t.label, r.w / 2, r.h - labelH / 2 - 1);
+    // a glow of the highlighter as it lands
+    const glow = Math.sin(Math.PI * clamp((lt - delay) / 14));
+    if (glow > 0) {
+      ctx.fillStyle = `rgba(255, 225, 77, ${0.22 * glow})`;
+      ctx.fillRect(0, 0, r.w, r.h);
+    }
+    ctx.restore();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+// ------------------------------------------------------------ the end card
+/** The handwritten title, written up to `upTo` (0..1 of its length); returns where the pen is. */
+function drawTitle(upTo) {
+  if (!title) return null;
+  let total = 0;
+  for (const s of title.strokes) total += s.len + title.gap;
+  let left = upTo * total;
+  let at = null;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#141416";
+  for (const s of title.strokes) {
+    if (left <= 0) break;
+    const pts = s.pts;
+    let acc = 0;
+    for (let i = 3; i < pts.length; i += 3) {
+      const d = Math.hypot(pts[i] - pts[i - 3], pts[i + 1] - pts[i - 2]);
+      ctx.lineWidth = title.width * (0.45 + 0.9 * pts[i + 2]);
+      if (acc + d > left) {
+        const u = (left - acc) / d;
+        const x = pts[i - 3] + (pts[i] - pts[i - 3]) * u;
+        const y = pts[i - 2] + (pts[i + 1] - pts[i - 2]) * u;
+        ctx.beginPath();
+        ctx.moveTo(pts[i - 3], pts[i - 2]);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+        at = { x, y, down: true };
+        left = 0;
+        break;
+      }
+      ctx.beginPath();
+      ctx.moveTo(pts[i - 3], pts[i - 2]);
+      ctx.lineTo(pts[i], pts[i + 1]);
+      ctx.stroke();
+      acc += d;
+    }
+    if (left > 0) {
+      left -= s.len;
+      at = { x: pts[pts.length - 3], y: pts[pts.length - 2], down: false };
+      left -= title.gap;
+    }
+  }
+  ctx.restore();
+  return at;
+}
+
+/** A giant highlighter stroke sweeping across the frame: the end card's yellow. */
+function drawSweep(u) {
+  if (u <= 0) return;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.translate(VIDEO.w / 2, VIDEO.h / 2);
+  ctx.rotate(-0.38);
+  const W = 2400, H = 2000;
+  // the front of the stroke, from just left of the picture to past its right edge
+  const x1 = -980 + 2050 * easeInOut(u);
+  ctx.beginPath();
+  ctx.moveTo(-W / 2, -H / 2);
+  // a soft, gently wavy front, like the edge of a felt tip
+  for (let i = 0; i <= 80; i++) {
+    const y = -H / 2 + (H * i) / 80;
+    ctx.lineTo(x1 + 16 * Math.sin(y / 170) + 6 * Math.sin(y / 61 + 1.3), y);
+  }
+  ctx.lineTo(-W / 2, H / 2);
+  ctx.closePath();
+  ctx.fillStyle = MARKER;
+  ctx.fill();
+  ctx.restore();
+}
+
+const endEls = ["e1", "e2", "e3", "e4", "e5"].map((id) => document.getElementById(id));
+
+// ------------------------------------------------------------ one video frame
+const layer = document.createElement("canvas");
+layer.width = VIDEO.w;
+layer.height = VIDEO.h;
+
+function captionBand() {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const band = ctx.createLinearGradient(0, 0, 0, 350);
+  band.addColorStop(0, "rgba(15,15,17,1)");
+  band.addColorStop(0.72, "rgba(15,15,17,0.96)");
+  band.addColorStop(1, "rgba(15,15,17,0)");
+  ctx.fillStyle = band;
+  ctx.fillRect(0, 0, VIDEO.w, 350);
+  ctx.restore();
+}
+
+async function renderFrame(f) {
+  const fr = T.frames[f];
+  const t = f / FPS;
+  const clip = clipById[fr.clip];
+  ctx = main;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.drawImage(bg, 0, 0);
+  const endEl = document.getElementById("end");
+  endEl.hidden = fr.clip !== "end";
+  let info = { clip: fr.clip, local: fr.local, pen: null, ink: null, tap: false, touch: !!fr.touch, event: null };
+
+  if (fr.clip === "wall" || fr.clip === "end") {
+    const wall = clipById.wall;
+    const wl = fr.clip === "wall" ? fr.local : wall.frames + fr.local;
+    // the last tablet eases back and fades as the wall builds up
+    if (wl < 18) {
+      const lastF = wall.start - 1;
+      const u = easeInOut(wl / 18);
+      await drawFootage(lastF, { alpha: 1 - u, extra: { k: 1 - 0.42 * u, dx: 0, dy: 40 * u, rot: 0.03 * u }, pen: false });
+    }
+    await drawWall(wl, 0);
+    if (fr.clip === "wall") {
+      captionBand();
+      info.event = fr.local === 0 ? "wall" : null;
+      // the tiles landing (for the sound)
+      info.tiles = wallTiles.map((_, i) => tileDelay(i)).filter((d) => Math.floor(d) === fr.local).length;
+    }
+    if (fr.clip === "end") {
+      const lt = fr.local / FPS;
+      const sweepU = clamp(lt / 0.62);
+      drawSweep(sweepU);
+      if (sweepU >= 1) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = MARKER;
+        ctx.fillRect(0, 0, VIDEO.w, VIDEO.h);
+        // the paper of the end card: a faint dot grid on the yellow
+        ctx.fillStyle = "rgba(120, 90, 0, 0.12)";
+        for (let y = 24; y < VIDEO.h; y += 40) for (let x = 20; x < VIDEO.w; x += 40) {
+          ctx.beginPath();
+          ctx.arc(x, y, 1.6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      const w0 = 0.62, w1 = 2.3;
+      const at = drawTitle(clamp((lt - w0) / (w1 - w0)));
+      if (at && lt > w0 - 0.3 && lt < w1 + 0.5) {
+        const a = Math.min(clamp((lt - (w0 - 0.3)) / 0.22), 1 - clamp((lt - w1 - 0.12) / 0.3));
+        drawPen(at.x, at.y, 1.05, at.down && lt < w1 ? 0 : 1, a);
+        info.pen = { x: at.x, y: at.y, down: at.down && lt > w0 && lt < w1, video: true };
+      }
+      const show = (el, t0, dy = 22) => {
+        const v = easeOut((lt - t0) / 0.55);
+        el.style.opacity = String(v);
+        el.style.transform = `translateY(${(1 - v) * dy}px)`;
+      };
+      show(endEls[0], 0.45);
+      show(endEls[1], 2.15);
+      show(endEls[2], 2.45);
+      show(endEls[3], 2.75);
+      show(endEls[4], 3.05);
+      const shine = clamp((lt - 3.7) / 0.7);
+      endEls[3].style.backgroundImage = shine > 0 && shine < 1 ? `linear-gradient(105deg, transparent ${shine * 140 - 40}%, rgba(255,255,255,0.16) ${shine * 140 - 25}%, transparent ${shine * 140 - 10}%)` : "none";
+      info.event = fr.local === 0 ? "end" : null;
+    }
+    updateCaptions(t, f);
+    updateCounter(f);
+    drawGrain(f, fr.clip === "end" ? 0.02 : 0.035);
+    return info;
+  }
+
+  const M = await drawFootage(f);
+  info.pen = fr.pen ? { x: fr.pen.x, y: fr.pen.y, down: !!fr.pen.down } : null;
+  info.ink = fr.ink ?? null;
+  info.tap = !!fr.tap;
+  const startEvent = fr.local === 0 && clip.in ? clip.in : null;
+  const cutEvent = fr.cut && !fr.step ? "cut" : null;
+  info.event = startEvent ?? cutEvent;
+  if (fr.step && fr.stepLocal === 0) info.event = "step";
+  captionBand();
+  updateCaptions(t, f);
+  updateCounter(f);
+  drawGrain(f);
+  return info;
+}
+
+window.setup = async (data) => {
+  manifests = data.manifests;
+  T = build(manifests);
+  T.clips.forEach((c, i) => {
+    clipById[c.id] = c;
+    clipIndex[c.id] = i;
+  });
+  wallTiles = WALL.map((w) => {
+    const m = manifests[w.scene];
+    const idx = frameOf(m, w.at);
+    return { ...w, file: `${w.scene}/${m.frames[idx].file}` };
+  });
+  if (data.title) {
+    // fit the handwritten title into the top of the end card
+    const { strokes } = data.title;
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const s of strokes) for (let i = 0; i < s.length; i += 3) { x0 = Math.min(x0, s[i]); x1 = Math.max(x1, s[i]); y0 = Math.min(y0, s[i + 1]); y1 = Math.max(y1, s[i + 1]); }
+    const k = 880 / (x1 - x0);
+    const ox = (VIDEO.w - (x1 - x0) * k) / 2 - x0 * k;
+    const oy = 360 - ((y0 + y1) / 2) * k;
+    // a swoosh under the name, like an underline done with a flourish
+    const sw = [];
+    const ux0 = (VIDEO.w - 880) / 2 + 60, ux1 = (VIDEO.w + 880) / 2 - 20, uy = 360 + ((y1 - y0) / 2) * k + 34;
+    for (let i = 0; i <= 40; i++) {
+      const u = i / 40;
+      sw.push((ux0 + (ux1 - ux0) * u) / k - ox / k, (uy + 10 * Math.sin(Math.PI * u) - 16 * u * u) / k - oy / k, 0.35 + 0.5 * Math.sin(Math.PI * u));
+    }
+    strokes.push(sw);
+    title = {
+      width: 8.5,
+      gap: 60,
+      strokes: strokes.map((s) => {
+        const pts = [];
+        let len = 0;
+        for (let i = 0; i < s.length; i += 3) {
+          pts.push(s[i] * k + ox, s[i + 1] * k + oy, s[i + 2]);
+          if (i) len += Math.hypot(pts[pts.length - 3] - pts[pts.length - 6], pts[pts.length - 2] - pts[pts.length - 5]);
+        }
+        return { pts, len };
+      }),
+    };
+  }
+  makeCaptions();
+  await document.fonts.load('900 92px "Inter Display"');
+  await document.fonts.load('800 40px "Inter Display"');
+  await document.fonts.load('500 33px "Inter"');
+  await document.fonts.load('700 20px "Inter"');
+  // every picture of the wall decoded before the first frame
+  await Promise.all(wallTiles.map((t) => img(t.file)));
+  return { total: T.total, clips: T.clips.map((c) => ({ id: c.id, start: c.start, frames: c.frames })) };
+};
+window.renderFrame = renderFrame;
+window.timeline = () => T;
+</script>
+</body>
+</html>
