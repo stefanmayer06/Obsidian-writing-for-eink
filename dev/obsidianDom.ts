@@ -36,4 +36,9 @@ if (typeof g.createEl !== "function") {
       return make(docOf(this), "span", withParent(this, o));
     },
   });
+  Object.assign(HTMLElement.prototype, {
+    isShown(this: HTMLElement) {
+      return this.getClientRects().length > 0;
+    },
+  });
 }

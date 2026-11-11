@@ -2,7 +2,7 @@
 
 **Handwritten notebooks in Obsidian that feel like the Boox Notes app – made for e‑ink tablets such as the Onyx Boox Note Air.** Write with the pen on paper pages, flip to the **Text** page and read the same notes as Markdown: handwriting transcribed, drawings shown live, links working like everywhere else in Obsidian.
 
-Ink Notebook has its own pen engine. It draws every stroke the moment the pen moves – nothing is redrawn while you write – so it stays fast on e‑ink screens and on pages full of writing. There is nothing else to install.
+Ink Notebook has its own pen engine. It draws every stroke the moment the pen moves – nothing is redrawn while you write – so it stays fast on e‑ink screens and on pages full of writing. There is nothing else to install. On a Boox, the optional **Ink Notebook Bridge** app makes the ink appear with no lag at all, like in Boox Notes (see *Instant ink on a Boox*).
 
 
 ## Screenshots
@@ -157,6 +157,16 @@ Earlier versions of Ink Notebook (up to 1.4) were built on Excalidraw. Run the c
 4. Write on ruled paper with normal letter size; recognition works best with words that don't touch the lines above and below.
 5. On colour screens (Note Air C, Tab Ultra C, Go Color) the ink colours and highlighters show in colour.
 
+### Instant ink on a Boox (Ink Notebook Bridge)
+
+Any app's own drawing on an e‑ink screen lags behind the pen a little. Boox Notes avoids that because the Boox **firmware** draws the stroke straight onto the screen, and a plugin can't reach the firmware. The small **Ink Notebook Bridge** app can: it switches the firmware drawing on over the ink page, so your writing appears as fast as in Boox Notes. Ink Notebook still records every stroke as always and shows its own drawing of it when you pause.
+
+1. Download `ink-notebook-bridge.apk` from the [releases](https://github.com/stefanmayer06/Obsidian-writing-for-eink/releases) on the Boox and install it.
+2. Open it and allow *Display over other apps* and *Access to files* (it finds the vault through them; keep the vault in the device storage). Tap **Start the Bridge**.
+3. Open an ink page. *Settings → Ink Notebook → Instant ink on Boox* says *Connected*. The first strokes measure where the page is on screen.
+
+Instant ink is used for the pens. The highlighter, eraser, lasso, shapes and text work as before. It never draws over the toolbar, the pen cards, Obsidian's menus or other apps, and it stops when you leave the ink page. The firmware draws its own version of the pen, so the stroke can change very slightly when Ink Notebook's drawing replaces it (*Page's own ink after* sets when). How it works: [docs/boox-fast-ink-plan.md](docs/boox-fast-ink-plan.md) and [android/README.md](android/README.md).
+
 ## Setting up handwriting recognition
 
 Handwriting recognition is optional. Without it, the text page shows your handwriting as a picture (still with typed notes, links and drawings). It uses Azure AI Vision with your own key – the free tier is enough:
@@ -274,6 +284,7 @@ The pure logic (the ink model, file format, pens, erasers, shapes, OCR parsing, 
 - **Account:** none. Handwriting recognition uses your own Azure AI Vision resource (a free Azure account is enough).
 - **Network use:** Ink Notebook works offline. It connects to the internet only for handwriting recognition and, when you use *Papers from arXiv*, to find and download papers: it sends handwriting images to *your* Azure AI Vision resource. *Papers from arXiv* sends your search words to the arXiv API (export.arxiv.org), loads the list of popular papers from Hugging Face (huggingface.co) and downloads the PDF of a paper you import from arxiv.org – only when you open it or search; tapping a paper's arXiv id opens its page on arxiv.org in your browser. *Import from a link…* in the object library downloads the library from the link you paste (usually libraries.excalidraw.com); *Find libraries* opens libraries.excalidraw.com in your browser. There is no telemetry and no ads.
 - **Files in your vault:** Ink Notebook reads and writes files only in your vault, through Obsidian. It goes through the list of the vault's files to offer pictures, PDFs, notes and folders when you choose one; to find the ink pages (when a picture or PDF on them is renamed, for **Match up the names of ink and text pages** and for **Convert ink pages made with Excalidraw**); to find the `.excalidrawlib` libraries and the notes in the Mermaid folder of the object library; and to know which arXiv papers you imported before. Nothing of this leaves your device.
+- **Instant ink (Boox):** only when the Ink Notebook Bridge app runs on the same tablet: Ink Notebook tells it where the ink page is, over a connection to `127.0.0.1` (the tablet itself) or a small file in its plugin folder (`bridge/state.json`). Nothing leaves the device.
 - **Clipboard:** Ink Notebook reads the clipboard only when you tap **Paste** in *Add a Mermaid diagram*. Copy, cut and paste with the lasso on an ink page use its own clipboard, not the system's.
 
 ## License

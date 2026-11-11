@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- a pen nib over a line: black and white for e-ink -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M0,0h48v48h-48z" />
+    <path
+        android:fillColor="#000000"
+        android:pathData="M30.5,8.5l9,9l-17,17l-10.5,1.5l1.5,-10.5z M31,13l-14.5,14.5l-0.6,4.6l4.6,-0.6l14.5,-14.5z" />
+    <path
+        android:fillColor="#000000"
+        android:pathData="M8,40h32v2.5h-32z" />
+</vector>

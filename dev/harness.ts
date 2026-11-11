@@ -13,6 +13,8 @@ import { parseInkFile, serializeInkFile } from "../src/core/ink/codec";
 import { drawThumb, LibraryPanel } from "../src/ink/ui/libraryPanel";
 import { FLOWCHART_LIBRARY_ID, flowchartLibrary } from "../src/core/ink/flowchart";
 import { libraryItems, parseExcalidrawLibrary } from "../src/core/ink/excalidrawLib";
+import { FastInkBridge } from "../src/obsidian/fastInkBridge";
+import type InkNotebookPlugin from "../src/main";
 
 /** A small Excalidraw library (as from libraries.excalidraw.com). */
 const SAMPLE_LIBRARY = {
@@ -73,6 +75,8 @@ let toolbar: Toolbar | null = null;
 let library: LibraryPanel | null = null;
 /** The "Sample" library (replace it from the console to try any .excalidrawlib). */
 let sample: unknown = SAMPLE_LIBRARY;
+/** Instant ink, when attached (window.attachFastInk). */
+let fastInk: FastInkBridge | null = null;
 const surface = new InkSurface(root, {
   images: NO_IMAGES,
   icon,
@@ -85,6 +89,9 @@ const surface = new InkSurface(root, {
     library?.markActive();
   },
   notice: (m) => log.push(`notice:${m}`),
+  viewChanged: () => fastInk?.update(),
+  penDown: (x, y) => fastInk?.penDown(x, y),
+  inkDiscarded: () => fastInk?.discard(),
 });
 toolbar = new Toolbar(root, surface, {
   icon,
@@ -130,7 +137,38 @@ root.prepend(toolbar.el);
 surface.load({ doc: newDoc(), meta: EMPTY_META });
 surface.resize();
 
+/**
+ * Instant ink with the real plugin code, talking to a Bridge on 127.0.0.1
+ * (dev/fastink-e2e.cjs runs one without Android). The plugin around it is a
+ * stand-in: settings, a vault adapter in memory, DOM events.
+ */
+function attachFastInk(): FastInkBridge {
+  const files = new Map<string, string>();
+  const plugin = {
+    settings: { fastInk: "on", fastInkRefreshMs: 800, sideButton: "eraser" },
+    manifest: { id: "ink-notebook", dir: ".obsidian/plugins/ink-notebook" },
+    app: {
+      vault: {
+        configDir: ".obsidian",
+        adapter: {
+          exists: async (p: string) => files.has(p) || [...files.keys()].some((k) => k.startsWith(`${p}/`)),
+          mkdir: async () => undefined,
+          write: async (p: string, t: string) => void files.set(p, t),
+          read: async (p: string) => files.get(p) ?? "",
+        },
+      },
+    },
+    registerDomEvent: (el: EventTarget, name: string, fn: EventListener) => el.addEventListener(name, fn),
+    registerInterval: (id: number) => id,
+  } as unknown as InkNotebookPlugin;
+  fastInk = new FastInkBridge(plugin, () => ({ surface, containerEl: root }));
+  fastInk.start();
+  return fastInk;
+}
+
 Object.assign(window, {
+  attachFastInk,
+  fastInk: () => fastInk,
   surface,
   library: () => library,
   log,

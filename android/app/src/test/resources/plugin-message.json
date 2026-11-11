@@ -1,0 +1,41 @@
+{
+  "v": 1,
+  "type": "state",
+  "seq": 42,
+  "armed": true,
+  "until": 5000,
+  "dpr": 2,
+  "region": {
+    "x": 0,
+    "y": 57,
+    "w": 620,
+    "h": 799
+  },
+  "exclude": [
+    {
+      "x": 400,
+      "y": 70,
+      "w": 201,
+      "h": 300
+    },
+    {
+      "x": 600,
+      "y": 800,
+      "w": 20,
+      "h": 56
+    }
+  ],
+  "pen": {
+    "style": "fountain",
+    "width": 5.4,
+    "color": "#d32f2f"
+  },
+  "refreshMs": 800,
+  "sideButtonErases": true,
+  "clear": 3,
+  "down": {
+    "x": 100.5,
+    "y": 200.3,
+    "t": 4000
+  }
+}

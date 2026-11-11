@@ -7,6 +7,7 @@ import { SetupWizard } from "./setupWizard";
 import { recognitionItems } from "./recognitionSettings";
 import { DAILY_INK_OPTIONS } from "../settings";
 import { dailyNoteSettings } from "./dailyNotes";
+import { BRIDGE_DOWNLOAD_URL, BRIDGE_START_URL } from "./fastInkBridge";
 import { controlsByKey, folderValue, positiveInt, renderSettingItems, settingStore, type InkControl, type InkSetting, type InkSettingItem, type SettingStore } from "./settingItems";
 
 /**
@@ -45,6 +46,32 @@ export class InkSettingTab extends PluginSettingTab {
   /** Obsidian before 1.13. */
   display(): void {
     this.draw();
+  }
+
+  hide(): void {
+    this.plugin.fastInk.onChange = null;
+    super.hide();
+  }
+
+  /** Where instant ink stands, in words. */
+  private fastInkStatus(): string {
+    const b = this.plugin.fastInk;
+    switch (b.connection) {
+      case "off":
+        return this.plugin.settings.fastInk === "off"
+          ? "Off."
+          : "Not on this device: instant ink needs an Onyx Boox tablet (or choose “Always on” for another Android tablet with the Boox firmware).";
+      case "waiting":
+        return "The Bridge app is not running. Install it on your Boox, allow it to display over other apps and to access files, then start it – and keep your vault in the device storage.";
+      case "connected": {
+        const s = b.status;
+        const via = b.transport === "socket" ? "direct connection" : "control file";
+        let text = `Connected to the Bridge app${s?.app ? ` ${s.app}` : ""} (${via}).`;
+        if (s && !s.calibrated) text += " The position on screen is measured from your first strokes.";
+        if (s?.error) text += ` Problem: ${s.error}`;
+        return text;
+      }
+    }
   }
 
   private draw(): void {
@@ -104,6 +131,33 @@ export class InkSettingTab extends PluginSettingTab {
             name: "Low-latency drawing",
             desc: "Draws the ink straight to the screen. Automatic leaves it off on e-ink screens, where it can show colours and the highlighter with a stripy pattern. Turn it off if the page flickers on your device.",
             control: { type: "dropdown", key: "lowLatency", options: { auto: "Automatic", on: "Always on", off: "Off" }, after: apply },
+          },
+        ],
+      },
+      {
+        type: "group",
+        heading: "Instant ink on Boox",
+        items: [
+          {
+            name: "Instant ink",
+            desc: "With the Ink Notebook Bridge app, the Boox firmware draws your writing straight onto the screen – with no lag, like in the Boox Notes app – while Ink Notebook records the strokes as always. Automatic: on Boox tablets, once the Bridge app is running.",
+            aliases: ["Boox", "latency", "lag", "Bridge"],
+            control: { type: "dropdown", key: "fastInk", options: { auto: "Automatic", on: "Always on", off: "Off" }, after: () => this.refresh() },
+          },
+          {
+            name: "Page's own ink after",
+            desc: "Milliseconds after you lift the pen before the instant ink gives way to the page's own drawing of the strokes. Longer means fewer screen refreshes while you write.",
+            control: { type: "slider", key: "fastInkRefreshMs", min: 200, max: 3000, step: 100, after: () => this.plugin.fastInk.update() },
+          },
+          {
+            name: "Ink Notebook Bridge app",
+            desc: this.fastInkStatus(),
+            render: (setting) => {
+              this.plugin.fastInk.onChange = () => this.refresh();
+              setting
+                .addButton((b) => b.setButtonText("Start the Bridge").onClick(() => window.open(BRIDGE_START_URL)))
+                .addButton((b) => b.setButtonText("Get the app").onClick(() => window.open(BRIDGE_DOWNLOAD_URL)));
+            },
           },
         ],
       },

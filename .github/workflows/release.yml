@@ -63,8 +63,46 @@ jobs:
             manifest.json
             styles.css
 
+  # The Ink Notebook Bridge app (android/): instant ink on Boox tablets. Its APK goes with every release.
+  # Signed with the key in the secrets BRIDGE_KEYSTORE_BASE64, BRIDGE_KEYSTORE_PASSWORD, BRIDGE_KEY_ALIAS and
+  # BRIDGE_KEY_PASSWORD when they are set (needed so that a new version installs over the previous one);
+  # otherwise with a throwaway debug key.
+  bridge:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.BRIDGE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/bridge.jks"
+            echo "BRIDGE_KEYSTORE=$RUNNER_TEMP/bridge.jks" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No BRIDGE_KEYSTORE_BASE64 secret: the Bridge APK is signed with a throwaway key (it will not install over a differently signed version)."
+          fi
+      - name: Test and build
+        env:
+          BRIDGE_KEYSTORE_PASSWORD: ${{ secrets.BRIDGE_KEYSTORE_PASSWORD }}
+          BRIDGE_KEY_ALIAS: ${{ secrets.BRIDGE_KEY_ALIAS }}
+          BRIDGE_KEY_PASSWORD: ${{ secrets.BRIDGE_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon testDebugUnitTest assembleRelease
+      - run: cp app/build/outputs/apk/release/app-release.apk ink-notebook-bridge.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ink-notebook-bridge
+          path: android/ink-notebook-bridge.apk
+
   release:
-    needs: build
+    needs: [build, bridge]
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.release && !inputs.test)
     runs-on: ubuntu-latest
     permissions:
@@ -87,6 +125,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: ink-notebook
+      - uses: actions/download-artifact@v4
+        with:
+          name: ink-notebook-bridge
 
       - name: Attest the released files
         uses: actions/attest@v4
@@ -95,6 +136,7 @@ jobs:
             main.js
             manifest.json
             styles.css
+            ink-notebook-bridge.apk
 
       - name: Read version
         id: version
@@ -111,9 +153,10 @@ jobs:
             main.js
             manifest.json
             styles.css
+            ink-notebook-bridge.apk
 
   test-build:
-    needs: build
+    needs: [build, bridge]
     if: github.event_name == 'workflow_dispatch' && inputs.test
     runs-on: ubuntu-latest
     permissions:
@@ -126,6 +169,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: ink-notebook
+      - uses: actions/download-artifact@v4
+        with:
+          name: ink-notebook-bridge
 
       - name: Replace the previous test build
         run: gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
@@ -148,3 +194,4 @@ jobs:
             main.js
             manifest.json
             styles.css
+            ink-notebook-bridge.apk

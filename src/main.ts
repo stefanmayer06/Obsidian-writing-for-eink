@@ -5,6 +5,7 @@ import { OcrService } from "./obsidian/ocrService";
 import { SyncEngine } from "./obsidian/syncEngine";
 import { BookmarkManager } from "./obsidian/bookmarks";
 import { PageSwitcher } from "./obsidian/pageSwitcher";
+import { FastInkBridge } from "./obsidian/fastInkBridge";
 import { InkSettingTab } from "./obsidian/settingsTab";
 import { SetupWizard } from "./obsidian/setupWizard";
 import { applyEinkClasses, einkActive, removeEinkClasses } from "./obsidian/einkMode";
@@ -39,6 +40,8 @@ export default class InkNotebookPlugin extends Plugin {
   sync!: SyncEngine;
   bookmarks!: BookmarkManager;
   switcher!: PageSwitcher;
+  /** Instant ink on Boox tablets (with the Ink Notebook Bridge app). */
+  fastInk!: FastInkBridge;
   /** Pictures and PDF pages for the ink pages. */
   images!: VaultImages;
   /** Papers from arXiv. */
@@ -79,6 +82,8 @@ export default class InkNotebookPlugin extends Plugin {
     );
     this.bookmarks = new BookmarkManager(this);
     this.switcher = new PageSwitcher(this);
+    this.fastInk = new FastInkBridge(this, () => this.app.workspace.getActiveViewOfType(InkView));
+    this.fastInk.start();
     const refreshStatus = debounce(
       () => {
         this.bookmarks.refreshAll();
@@ -113,6 +118,8 @@ export default class InkNotebookPlugin extends Plugin {
     );
     this.registerEvent(this.app.workspace.on("layout-change", onLayout));
     this.registerEvent(this.app.workspace.on("active-leaf-change", onLayout));
+    this.registerEvent(this.app.workspace.on("layout-change", () => this.fastInk.update()));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.fastInk.update()));
     this.registerEvent(this.app.workspace.on("file-open", onLayout));
     this.registerEvent(this.app.workspace.on("file-open", (file) => this.refreshStaleTextPage(file)));
     this.registerEvent(this.app.workspace.on("file-open", (file) => this.daily.onOpen(file)));
@@ -141,6 +148,7 @@ export default class InkNotebookPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.fastInk?.destroy();
     this.bookmarks?.removeAll();
     removeEinkClasses();
     for (const t of this.inkTimers.values()) window.clearTimeout(t);
@@ -230,6 +238,7 @@ export default class InkNotebookPlugin extends Plugin {
     applyEinkClasses(this.settings);
     for (const v of this.inkViews()) v.applySettings();
     this.bookmarks.refreshAll();
+    this.fastInk.update();
   }
 
   /** Show an ink page's file as Markdown (the raw data). */

@@ -95,7 +95,11 @@ export class InkView extends TextFileView {
       toolChanged: () => {
         this.toolbar?.refreshTools();
         this.library?.markActive();
+        plugin.fastInk.update();
       },
+      viewChanged: () => plugin.fastInk.update(),
+      penDown: (x, y) => plugin.fastInk.penDown(x, y),
+      inkDiscarded: () => plugin.fastInk.discard(),
       historyChanged: (u, r) => this.toolbar?.refreshHistory(u, r),
       selectionActions: () => this.selectionActions(),
       notice: (m) => new Notice(m, 2500),

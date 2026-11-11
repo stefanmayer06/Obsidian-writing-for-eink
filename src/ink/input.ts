@@ -221,6 +221,7 @@ export class InputRouter {
     }
     const tool = this.toolFor(e);
     if (tool === "none") return;
+    if (e.pointerType === "pen") this.s.host.penDown?.(e.clientX, e.clientY);
     const rect = this.s.el.getBoundingClientRect();
     if (tool !== "lasso" && tool !== "eraser") {
       const target = this.linkAt(this.s.toPage(e.clientX, e.clientY, rect));
@@ -277,6 +278,8 @@ export class InputRouter {
     if (this.link && e.pointerId === this.link.pointer) {
       const l = this.link;
       this.link = null;
+      // the pen tapped a link: whatever the Boox firmware drew there is not ink
+      if (e.pointerType === "pen") this.s.host.inkDiscarded?.();
       if (Math.hypot(e.clientX - l.x, e.clientY - l.y) < TAP_PX) this.s.host.openLink(l.target, e.ctrlKey || e.metaKey);
       return;
     }

@@ -4,7 +4,38 @@
 
 **Answer in one line:** a small companion Android app ("Ink Notebook Bridge") turns on Onyx's *firmware* pen drawing over the ink page, and the plugin tells it where the page is, which pen is selected and when to stop. The firmware paints the ink straight onto the e‑ink panel, which is the same path Boox Notes uses, so the latency is the same by construction. The plugin keeps receiving the pen exactly as today, saves the real stroke and replaces the firmware ink with its own drawing when you pause.
 
-This is the plan, not the implementation. Phase 0 below needs no code and can confirm the core idea on your tablet today.
+## Status (November 2026)
+
+**Built:** Phases 1 and most of 2.
+- The Bridge app is in `android/`. It is built against Onyx's real SDK, and CI attaches its APK to every release.
+- The plugin side is `src/core/fastInk.ts` and `src/obsidian/fastInkBridge.ts`, plus the hooks in the pen engine, and *Settings → Instant ink on Boox*.
+
+**Verified without a Boox:**
+- **Kotlin unit tests (14):** protocol, calibration, vault discovery, and the real WebSocket server, which accepts Obsidian's origins and rejects a website's.
+- **Contract test:** a message produced by the plugin's own code is read by the app's parser.
+- **Plugin tests (270):** all of them, including the instant ink messages.
+- **End-to-end test (`dev/fastink-e2e.cjs`):** the real plugin (surface, toolbar, bridge) runs in Chromium as `http://localhost`, with real pen input, connected to the real Bridge control code on the JVM. All 17 checks pass. They cover:
+  - the page placed from the guess, then measured from the first stroke
+  - the plugin still recording the stroke
+  - the open pen card left out of the drawing area
+  - lasso and highlighter stopping it
+  - pen style, colour and width following the pen and the zoom
+  - an Obsidian modal and a sidebar over the page stopping it
+  - hold‑to‑snap clearing the firmware's line
+  - the firmware stopping when the plugin goes away
+
+**Still to do on a tablet:**
+- The firmware call itself (`TouchHelper` drawing), which nothing but a Boox can run.
+- Which transport Obsidian allows (the socket or the file).
+- How the firmware's pen styles compare with the plugin's.
+- The refresh after lifting the pen.
+
+Boox Rapid Draw users report the same firmware path working over Obsidian, so the risk is in the details, not in the approach.
+
+**Differences from the plan below, as built:**
+- The plugin keeps drawing live during the stroke, as it does with Rapid Draw. Skipping it is an optimisation for after the device test.
+- Leases are 6 s (socket) and 10 s (file), renewed every 2 s and 4 s.
+- The plugin writes nothing and opens no connection until the Bridge's status file has appeared (or instant ink is set to *Always on*).
 
 ---
 

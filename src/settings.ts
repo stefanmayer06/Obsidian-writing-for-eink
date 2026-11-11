@@ -10,6 +10,8 @@ export type AzureApi = "auto" | "v4" | "v3.2";
 export type EinkMode = "auto" | "on" | "off";
 /** Chrome's low-latency canvas for the ink page; auto: not on e-ink screens. */
 export type LowLatencyMode = "auto" | "on" | "off";
+/** Instant ink through the Ink Notebook Bridge app; auto: on Boox tablets. */
+export type FastInkMode = "auto" | "on" | "off";
 export type BookmarkPosition = "top" | "middle" | "bottom";
 export type TextViewMode = "reading" | "editing" | "keep";
 export type DiagramSensitivity = "low" | "normal" | "high";
@@ -77,6 +79,10 @@ export interface InkSettings {
   fit: FitMode;
   toolbarPosition: ToolbarPosition;
   lowLatency: LowLatencyMode;
+  /** Instant ink on Boox tablets with the Ink Notebook Bridge app. */
+  fastInk: FastInkMode;
+  /** How long after lifting the pen the firmware's ink gives way to the page's own drawing (ms). */
+  fastInkRefreshMs: number;
 
   // ---- display ----
   einkMode: EinkMode;
@@ -140,6 +146,8 @@ export const DEFAULT_SETTINGS: InkSettings = {
   fit: "page",
   toolbarPosition: "top",
   lowLatency: "auto",
+  fastInk: "auto",
+  fastInkRefreshMs: 800,
 
   einkMode: "auto",
   bookmarkPosition: "top",
@@ -220,6 +228,8 @@ export function loadSettings(raw: unknown): InkSettings {
     toolbarPosition: oneOf(r.toolbarPosition, ["top", "bottom", "left", "right"] as const, d.toolbarPosition),
     // it was a switch, on by default: on becomes automatic (off on e-ink screens)
     lowLatency: r.lowLatency === false ? "off" : oneOf(r.lowLatency, ["auto", "on", "off"] as const, d.lowLatency),
+    fastInk: oneOf(r.fastInk, ["auto", "on", "off"] as const, d.fastInk),
+    fastInkRefreshMs: numberIn(r.fastInkRefreshMs, 200, 5000, d.fastInkRefreshMs),
 
     einkMode: oneOf(r.einkMode, ["auto", "on", "off"] as const, d.einkMode),
     bookmarkPosition: oneOf(r.bookmarkPosition, ["top", "middle", "bottom"] as const, d.bookmarkPosition),

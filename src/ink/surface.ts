@@ -522,6 +522,7 @@ export class InkSurface {
       this.paint(this.bctx, page, null);
     }
     this.schedulePreload();
+    this.host.viewChanged?.();
   }
 
   /** Redraw a part of the page (page units). */
