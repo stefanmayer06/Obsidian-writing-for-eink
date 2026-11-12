@@ -12,8 +12,8 @@ android {
         // Android 9: the oldest Boox pen tablets still in use run 10
         minSdk = 28
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
         ndk {
             // Boox tablets are ARM; the SDK's native pen reader comes for these
             abiFilters += setOf("armeabi-v7a", "arm64-v8a")
@@ -70,9 +70,11 @@ android {
 }
 
 dependencies {
-    // Onyx's pen SDK (firmware pen drawing), the same versions Boox Rapid Draw ships with
-    implementation("com.onyx.android.sdk:onyxsdk-pen:1.4.11")
-    implementation("com.onyx.android.sdk:onyxsdk-device:1.2.30")
+    // Onyx's pen SDK (firmware pen drawing). 1.5.9 (November 2026): its pen reader no longer
+    // knows only three digitizer names; with 1.4.11 the Note Air 6C reported the pen hovering
+    // but never touching
+    implementation("com.onyx.android.sdk:onyxsdk-pen:1.5.9")
+    implementation("com.onyx.android.sdk:onyxsdk-device:1.3.7")
     // the SDK calls hidden Android APIs (EpdController)
     implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
     // the control channel from Obsidian (ws://127.0.0.1)

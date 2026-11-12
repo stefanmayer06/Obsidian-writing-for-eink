@@ -24,6 +24,12 @@
   - hold‑to‑snap clearing the firmware's line
   - the firmware stopping when the plugin goes away
 
+**First tests on a Boox Note Air 6C (November 2026):**
+- The plugin and the Bridge connect through the control file. Obsidian blocks the direct connection, as expected.
+- The plugin asks for instant ink, and the Bridge turns it on.
+- With Onyx's pen SDK 1.4.11 (what Boox Rapid Draw uses), the firmware's pen reader reported the pen only as hovering, never as touching. That happened even in the Bridge's whole-screen self-test, so no firmware ink appeared. The 1.4.11 reader finds the digitizer by three fixed names and is older than this tablet.
+- Bridge 0.3.0 moves to SDK 1.5.9 (November 2026), whose pen reader was rewritten.
+
 **Still to do on a tablet:**
 - The firmware call itself (`TouchHelper` drawing), which nothing but a Boox can run.
 - Which transport Obsidian allows (the socket or the file).
