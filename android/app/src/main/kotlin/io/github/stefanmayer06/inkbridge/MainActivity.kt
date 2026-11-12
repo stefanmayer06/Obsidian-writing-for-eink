@@ -35,6 +35,7 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var vaults: TextView
     private lateinit var startStop: Button
+    private lateinit var testButton: Button
 
     private val tick = object : Runnable {
         override fun run() {
@@ -70,6 +71,15 @@ class MainActivity : Activity() {
         col.addView(button("Add a vault folder…") { pickVault() })
         startStop = button("Start") { toggle() }
         col.addView(startStop)
+        col.addView(
+            text(
+                "Test: turns the firmware drawing on over the whole screen for 30 seconds, without Obsidian. " +
+                    "Write anywhere (on this screen too): the ink should follow the pen with no lag.",
+                15f,
+            ),
+        )
+        testButton = button("Test instant ink (30 s)") { test() }
+        col.addView(testButton)
         col.addView(text("Status", 20f, bold = true))
         status = text("", 15f)
         col.addView(status)
@@ -207,6 +217,16 @@ class MainActivity : Activity() {
         startForegroundService(Intent(this, BridgeService::class.java))
     }
 
+    private fun test() {
+        if (!ready()) {
+            refreshSteps()
+            return
+        }
+        if (BridgeService.instance == null) start()
+        // the service may still be starting: ask again shortly
+        handler.postDelayed({ startService(Intent(this, BridgeService::class.java).setAction(BridgeService.ACTION_TEST)) }, 600)
+    }
+
     private fun stop() {
         BootReceiver.setWanted(this, false)
         startService(Intent(this, BridgeService::class.java).setAction(BridgeService.ACTION_STOP))
@@ -216,6 +236,7 @@ class MainActivity : Activity() {
         val svc = BridgeService.instance
         startStop.text = if (svc != null) "Stop the Bridge" else "Start the Bridge"
         startStop.isEnabled = svc != null || ready()
+        testButton.text = if (svc?.isTesting == true) "Testing… write anywhere" else "Test instant ink (30 s)"
         status.text = if (svc == null) {
             "Not running."
         } else {
@@ -230,7 +251,15 @@ class MainActivity : Activity() {
                     },
                 )
                 append("\n")
-                append(if (svc.isArmed) "Instant ink: on (pen over the ink page)." else "Instant ink: waiting (no ink page with the pen tool open).")
+                append(
+                    when {
+                        svc.isTesting -> "Instant ink: TEST – on over the whole screen."
+                        svc.isArmed -> "Instant ink: on (pen over the ink page)."
+                        else -> "Instant ink: waiting (no ink page with the pen tool open)."
+                    },
+                )
+                append("\n")
+                append("Firmware pen reader: ${svc.penHovers} hover(s), ${svc.penStrokes} stroke(s) seen.")
                 append("\n")
                 append(if (svc.isCalibrated) "Position: measured." else "Position: estimated. It is measured from your first strokes.")
                 svc.lastError?.let { append("\nProblem: $it") }

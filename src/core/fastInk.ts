@@ -58,6 +58,9 @@ export interface FastInkStatus {
   calibrated: boolean;
   transport?: string;
   error?: string;
+  /** What the firmware's pen reader reported to the Bridge (since it started). */
+  penHovers?: number;
+  penStrokes?: number;
 }
 
 /** What the page looks like right now, measured by the view. */
@@ -191,6 +194,8 @@ export function parseStatus(text: string): FastInkStatus | null {
       calibrated: r.calibrated === true,
       transport: typeof r.transport === "string" ? r.transport : undefined,
       error: typeof r.error === "string" ? r.error : undefined,
+      penHovers: typeof r.penHovers === "number" ? r.penHovers : undefined,
+      penStrokes: typeof r.penStrokes === "number" ? r.penStrokes : undefined,
     };
   } catch {
     return null;

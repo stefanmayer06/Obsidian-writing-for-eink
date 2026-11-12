@@ -12,8 +12,8 @@ android {
         // Android 9: the oldest Boox pen tablets still in use run 10
         minSdk = 28
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         ndk {
             // Boox tablets are ARM; the SDK's native pen reader comes for these
             abiFilters += setOf("armeabi-v7a", "arm64-v8a")
@@ -21,7 +21,7 @@ android {
     }
 
     signingConfigs {
-        // CI signs releases with a fixed key (secrets), so updates install over the previous version
+        // releases: the key in the CI secrets, so updates install over the previous version
         create("release") {
             val path = System.getenv("BRIDGE_KEYSTORE")
             if (path != null && file(path).exists()) {
@@ -31,6 +31,14 @@ android {
                 keyPassword = System.getenv("BRIDGE_KEY_PASSWORD")
             }
         }
+        // without those secrets: a fixed test key (public, in the repository), so that every test
+        // build still installs over the previous one instead of each CI run signing with a new key
+        create("test") {
+            storeFile = file("test-signing.jks")
+            storePassword = "inkbridge-test"
+            keyAlias = "inkbridge-test"
+            keyPassword = "inkbridge-test"
+        }
     }
 
     buildTypes {
@@ -38,7 +46,7 @@ android {
             // the Onyx SDK reaches the firmware through reflection: keep everything
             isMinifyEnabled = false
             val release = signingConfigs.getByName("release")
-            signingConfig = if (release.storeFile != null) release else signingConfigs.getByName("debug")
+            signingConfig = if (release.storeFile != null) release else signingConfigs.getByName("test")
         }
     }
 

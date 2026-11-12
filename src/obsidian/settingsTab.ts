@@ -91,6 +91,7 @@ export class InkSettingTab extends PluginSettingTab {
         const via = b.transport === "socket" ? "direct connection" : "control file";
         let text = `Connected to the Bridge app${s?.app ? ` ${s.app}` : ""} (${via}).`;
         if (s && !s.calibrated) text += " The position on screen is measured from your first strokes.";
+        if (s?.penStrokes !== undefined) text += ` The firmware's pen reader has reported ${s.penHovers ?? 0} hover(s) and ${s.penStrokes} stroke(s) to the Bridge.`;
         if (s?.error) text += ` Problem: ${s.error}`;
         return text;
       }

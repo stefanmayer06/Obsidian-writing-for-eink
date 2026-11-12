@@ -65,8 +65,8 @@ jobs:
 
   # The Ink Notebook Bridge app (android/): instant ink on Boox tablets. Its APK goes with every release.
   # Signed with the key in the secrets BRIDGE_KEYSTORE_BASE64, BRIDGE_KEYSTORE_PASSWORD, BRIDGE_KEY_ALIAS and
-  # BRIDGE_KEY_PASSWORD when they are set (needed so that a new version installs over the previous one);
-  # otherwise with a throwaway debug key.
+  # BRIDGE_KEY_PASSWORD when they are set; otherwise with the fixed test key in android/app/test-signing.jks
+  # (public, so that every test build still installs over the previous one).
   bridge:
     runs-on: ubuntu-latest
     defaults:
@@ -87,7 +87,7 @@ jobs:
             echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/bridge.jks"
             echo "BRIDGE_KEYSTORE=$RUNNER_TEMP/bridge.jks" >> "$GITHUB_ENV"
           else
-            echo "::warning::No BRIDGE_KEYSTORE_BASE64 secret: the Bridge APK is signed with a throwaway key (it will not install over a differently signed version)."
+            echo "::notice::No BRIDGE_KEYSTORE_BASE64 secret: the Bridge APK is signed with the public test key (android/app/test-signing.jks)."
           fi
       - name: Test and build
         env:

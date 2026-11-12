@@ -138,6 +138,8 @@ data class BridgeState(
             transport: String,
             error: String?,
             seq: Long,
+            penHovers: Int = 0,
+            penStrokes: Int = 0,
         ): String = JSONObject()
             .put("v", VERSION)
             .put("type", "status")
@@ -148,6 +150,8 @@ data class BridgeState(
             .put("offset", JSONObject().put("x", offsetX.toDouble()).put("y", offsetY.toDouble()))
             .put("transport", transport)
             .put("seq", seq)
+            .put("penHovers", penHovers)
+            .put("penStrokes", penStrokes)
             .apply { if (error != null) put("error", error) }
             .toString()
     }
@@ -155,5 +159,5 @@ data class BridgeState(
 
 /** The app version without depending on generated BuildConfig in unit tests. */
 object BuildConfigInfo {
-    const val VERSION_NAME = "0.1.0"
+    const val VERSION_NAME = "0.2.0"
 }

@@ -26,6 +26,7 @@ The approach of an overlay plus `TouchHelper` in SurfaceFlinger mode was shown t
    - **Access to files**, which it uses to find the vault's control file. The vault must be in the device storage, not in Obsidian's app storage.
    - Optionally, the notification.
 3. Tap **Start the Bridge**. It starts again by itself after a restart.
+   - **Test instant ink (30 s)** turns the firmware drawing on over the whole screen without Obsidian. If the ink follows the pen with no lag there, the firmware path works on your tablet. The status shows how many pen hovers and strokes the firmware's pen reader reported.
 4. In Obsidian, open an ink page. *Settings → Ink Notebook → Instant ink on Boox* shows *Connected*. The first strokes measure the position on screen.
 
 ## Build
@@ -34,7 +35,7 @@ The approach of an overlay plus `TouchHelper` in SurfaceFlinger mode was shown t
 cd android && ./gradlew testDebugUnitTest assembleRelease
 ```
 
-Release builds are signed with the key in `BRIDGE_KEYSTORE` / `BRIDGE_KEYSTORE_PASSWORD` / `BRIDGE_KEY_ALIAS` / `BRIDGE_KEY_PASSWORD` when set, otherwise with the debug key. CI builds the APK and attaches it to every release (`.github/workflows/release.yml`).
+Release builds are signed with the key in `BRIDGE_KEYSTORE` / `BRIDGE_KEYSTORE_PASSWORD` / `BRIDGE_KEY_ALIAS` / `BRIDGE_KEY_PASSWORD` when set. Otherwise they use the fixed test key `app/test-signing.jks`. It is public on purpose, so every test build installs over the previous one; set the secrets for real releases. CI builds the APK and attaches it to every release (`.github/workflows/release.yml`).
 
 ### Tests without a Boox
 
