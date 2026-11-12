@@ -191,6 +191,17 @@ function startBridge() {
     check("a sidebar slides over the page: the firmware stops", f && !f.armed);
     await page.evaluate(() => document.getElementById("drawer").remove());
     f = await waitFw((m) => m.armed);
+    // a small floating button of Obsidian's over the page is only left out
+    await page.evaluate(() => {
+      const b = document.createElement("button");
+      b.id = "fab";
+      b.style.cssText = "position:fixed;right:20px;bottom:20px;width:120px;height:120px;z-index:50";
+      document.body.appendChild(b);
+    });
+    f = await waitFw((m) => m.armed && m.exclude.some((r) => r[2] - r[0] >= 240 && r[3] - r[1] >= 240));
+    check("a small floating button over the page is left out, instant ink stays on", f?.armed && f.exclude.length > 0, JSON.stringify(f?.exclude));
+    await page.evaluate(() => document.getElementById("fab").remove());
+    f = await waitFw((m) => m.armed && m.exclude.length === 0);
 
     // a stroke that is not ink after all: hold to snap turns it into a line
     const before = f?.clears ?? 0;

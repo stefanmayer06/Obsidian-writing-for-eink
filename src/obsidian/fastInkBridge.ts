@@ -90,19 +90,28 @@ export function measureInkPage(surface: InkSurface, opts: { refreshMs: number; s
   const pen = t.tool === "pen" ? fastInkPen(t.pen, t.widths[t.pen], t.color, surface.view.scale, dpr) : null;
   let ready = doc.visibilityState === "visible" && !!region && !!pen;
   if (ready && doc.querySelector(BLOCKING_SELECTOR)) ready = false;
-  // typing somewhere else (the keyboard is up)
+  // typing somewhere else (the keyboard is up); an editor left focused in a hidden tab does not count
   const active = doc.activeElement;
-  if (ready && isEditable(active) && !surface.el.contains(active)) ready = false;
-  // something else lies over the page (a sidebar, a pop-up the plugin does not know)
+  if (ready && isEditable(active) && !surface.el.contains(active) && active instanceof HTMLElement && active.getClientRects().length > 0) ready = false;
+  // something else lies over the page: a small thing (a floating button) is left out of the
+  // drawing area, a big one (a sidebar, a pop-up the plugin does not know) stops instant ink
   if (ready && region) {
-    outer: for (let i = 0; i < 4; i++) {
-      for (let j = 0; j < 4; j++) {
-        const hit = doc.elementFromPoint(region.x + (region.w * (i + 0.5)) / 4, region.y + (region.h * (j + 0.5)) / 4);
+    const seen = new Set<Element>();
+    let covered = 0;
+    const n = 6;
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const hit = doc.elementFromPoint(region.x + (region.w * (i + 0.5)) / n, region.y + (region.h * (j + 0.5)) / n);
         if (!hit || surface.el.contains(hit) || hit.closest(UI_SELECTOR)) continue;
-        ready = false;
-        break outer;
+        covered++;
+        if (seen.has(hit)) continue;
+        seen.add(hit);
+        const r = hit.getBoundingClientRect();
+        if (r.width * r.height > 0.25 * region.w * region.h) covered = n * n;
+        else exclude.push(rectOf(r));
       }
     }
+    if (covered > (n * n) / 4) ready = false;
   }
   return { ready, region, exclude, pen, dpr, refreshMs: opts.refreshMs, sideButtonErases: opts.sideButtonErases };
 }
