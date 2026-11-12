@@ -29,7 +29,11 @@
 - The plugin asks for instant ink, and the Bridge turns it on.
 - With Onyx's pen SDK 1.4.11 (what Boox Rapid Draw uses), the firmware's pen reader reported the pen only as hovering, never as touching. That happened even in the Bridge's whole-screen self-test, so no firmware ink appeared. The 1.4.11 reader finds the digitizer by three fixed names and is older than this tablet.
 - Bridge 0.3.0 moves to SDK 1.5.9 (November 2026), whose pen reader was rewritten.
-- **With Bridge 0.4.0 (SDK 1.5.9), all three whole-screen self-tests drew ink on the Note Air 6C.** That includes test 1, the firmware's own reader, which is the path instant ink uses. Writing in Obsidian is the next test.
+- **With Bridge 0.4.0 (SDK 1.5.9), all three whole-screen self-tests drew ink on the Note Air 6C.** That includes test 1, the firmware's own reader, which is the path instant ink uses.
+- **In Obsidian with Bridge 0.4.0, the Ink Notebook page shows instant ink on the Note Air 6C:** the firmware draws the line right under the pen tip, and the plugin records the stroke. Two bugs remained:
+  - The whole drawing flashed after each stroke, because the Bridge turned the firmware's layer off at pen-up, as Rapid Draw does.
+  - After a colour or size change, instant ink took a while to come back, because pen-hover reports flooded the Bridge's main thread with firmware calls.
+- Bridge 0.5.0 fixes both: it repaints only the stroke's area at pen-up, and coalesces the hover reports.
 
 **Still to do on a tablet:**
 - The firmware call itself (`TouchHelper` drawing), which nothing but a Boox can run.
