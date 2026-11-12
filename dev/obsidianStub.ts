@@ -4,3 +4,10 @@
  * Android tablet.
  */
 export const Platform = { isAndroidApp: true, isMobileApp: true, isMobile: true, isDesktop: false, isDesktopApp: false };
+
+/** Obsidian's Android file adapter (the harness keeps its files in memory instead). */
+export class CapacitorAdapter {
+  getFullPath(path: string): string {
+    return path;
+  }
+}

@@ -1,4 +1,4 @@
-import { Platform } from "obsidian";
+import { CapacitorAdapter, Platform } from "obsidian";
 import type InkNotebookPlugin from "../main";
 import {
   buildMessage,
@@ -110,6 +110,8 @@ export function measureInkPage(surface: InkSurface, opts: { refreshMs: number; s
 export class FastInkBridge {
   private socket: WebSocket | null = null;
   private socketOpen = false;
+  /** The last attempt to connect directly: none yet, it worked, or it was refused (Obsidian blocks it or the Bridge is not running). */
+  private socketResult: "none" | "open" | "failed" = "none";
   private lastSocketTry = Number.NEGATIVE_INFINITY;
   private seq = 0;
   private clearCount = 0;
@@ -152,6 +154,25 @@ export class FastInkBridge {
 
   get transport(): "socket" | "file" | null {
     return this.socketOpen ? "socket" : this.statusVia;
+  }
+
+  /** Where the vault is on the device (Android), or null. */
+  get vaultPath(): string | null {
+    const a = this.plugin.app.vault.adapter;
+    try {
+      return a instanceof CapacitorAdapter ? a.getFullPath("") : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The vault is in Obsidian's own app storage, which the Bridge cannot read (Android 11+). */
+  get vaultInAppStorage(): boolean {
+    return /\/Android\/data\//.test(this.vaultPath ?? "");
+  }
+
+  get lastDirectConnection(): "none" | "open" | "failed" {
+    return this.socketResult;
   }
 
   private get dir(): string {
@@ -356,6 +377,7 @@ export class FastInkBridge {
       window.clearTimeout(timeout);
       if (this.socket !== ws || this.destroyed) return ws.close();
       this.socketOpen = true;
+      this.socketResult = "open";
       // the whole state again, over the socket
       this.sent = null;
       this.send(true);
@@ -367,7 +389,12 @@ export class FastInkBridge {
     };
     ws.onclose = () => {
       window.clearTimeout(timeout);
-      if (this.socket === ws) this.dropSocket();
+      if (this.socket !== ws) return;
+      if (!this.socketOpen && this.socketResult !== "failed") {
+        this.socketResult = "failed";
+        this.onChange?.();
+      }
+      this.dropSocket();
     };
   }
 

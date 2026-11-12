@@ -61,8 +61,19 @@ export class InkSettingTab extends PluginSettingTab {
         return this.plugin.settings.fastInk === "off"
           ? "Off."
           : "Not on this device: instant ink needs an Onyx Boox tablet (or choose “Always on” for another Android tablet with the Boox firmware).";
-      case "waiting":
-        return "The Bridge app is not running. Install it on your Boox, allow it to display over other apps and to access files, then start it – and keep your vault in the device storage.";
+      case "waiting": {
+        let text = "Not connected. Install the Bridge app on your Boox, allow it to display over other apps and to access files, start it, then open an ink page.";
+        const direct = b.lastDirectConnection;
+        if (direct === "failed") text += " Direct connection: refused (Obsidian blocks it, or the Bridge is not running) – the control file in the vault is used instead.";
+        else if (direct === "none") text += " Direct connection: not tried yet (it is tried while an ink page is open).";
+        const vault = b.vaultPath;
+        if (vault) {
+          text += b.vaultInAppStorage
+            ? ` Your vault is in Obsidian's app storage (${vault}), which the Bridge cannot read: it needs the direct connection, or move the vault to the device storage.`
+            : ` Vault: ${vault} (the Bridge looks for it there; it is listed in the Bridge app under Vaults).`;
+        }
+        return text;
+      }
       case "connected": {
         const s = b.status;
         const via = b.transport === "socket" ? "direct connection" : "control file";
