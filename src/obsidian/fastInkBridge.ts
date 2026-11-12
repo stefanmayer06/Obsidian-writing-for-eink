@@ -26,8 +26,9 @@ import { currentDevice } from "./einkMode";
  *
  * Two ways to the Bridge: a WebSocket on 127.0.0.1 (instant, when Obsidian's
  * WebView allows it), else a small file in this plugin's folder that the Bridge
- * watches. Nothing is written or connected until the Bridge has shown up (its
- * status file), unless instant ink is set to "Always on".
+ * watches. The socket is tried while an ink page is open; nothing is written to the
+ * file until the Bridge has shown up (its status file), unless instant ink is set
+ * to "Always on".
  */
 
 /** The active ink page, as far as instant ink is concerned. */
@@ -301,7 +302,9 @@ export class FastInkBridge {
     const renew = this.socketOpen ? RENEW_SOCKET_MS : RENEW_FILE_MS;
     this.send(!!this.sent?.armed && now - this.sentAt >= renew);
     const pageOpen = !!this.activeView();
-    if (!this.socketOpen && pageOpen && this.bridgeSeen()) {
+    // the socket is tried even before the Bridge's status file shows up: the Bridge may not find
+    // the vault (Obsidian's app storage), and the socket needs no file access
+    if (!this.socketOpen && pageOpen) {
       const wait = this.statusVia === "file" && this.statusFresh(STATUS_FRESH_MS) ? SOCKET_RETRY_SLOW_MS : SOCKET_RETRY_MS;
       if (now - this.lastSocketTry > wait) this.connectSocket();
     }
