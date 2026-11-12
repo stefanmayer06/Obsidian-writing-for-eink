@@ -73,6 +73,16 @@ class BridgeService : Service() {
     private var lastStatusWrite = 0L
     /** The self-test (whole screen, no Obsidian needed) runs until then. */
     private var testUntil = 0L
+    /**
+     * The self-test's pen engine (TouchHelper.FEATURE_*): 2, the firmware's own reader reads the pen
+     * (what instant ink uses); 4 and 1, this window takes the pen for the test and hands its events
+     * to the firmware drawing (to find out what works on a tablet whose reader does not).
+     */
+    private var testFeature = TouchHelper.FEATURE_SF_TOUCH_RENDER
+    private var testHelper: TouchHelper? = null
+    /** Pen/finger events this window received during a test that takes the pen. */
+    @Volatile var touchEvents = 0
+        private set
 
     /** What the firmware's pen reader reported (to tell whether the firmware path works on this tablet). */
     @Volatile var penHovers = 0
@@ -85,6 +95,7 @@ class BridgeService : Service() {
         private set
     val isArmed: Boolean get() = enabled
     val isTesting: Boolean get() = testUntil > System.currentTimeMillis()
+    val testName: String get() = testNameOf(testFeature)
     val isCalibrated: Boolean get() = calibration.calibrated
     val transportName: String get() = transport
     val lastError: String? get() = error
@@ -121,13 +132,15 @@ class BridgeService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_RESCAN -> file?.rescanNow()
-            ACTION_TEST -> startTest()
+            ACTION_TEST -> startTest(intent.getIntExtra(EXTRA_FEATURE, TouchHelper.FEATURE_SF_TOUCH_RENDER))
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
+        testHelper?.let { runCatching { it.closeRawDrawing() } }
+        testHelper = null
         closeRaw()
         try {
             unregisterReceiver(screenOff)
@@ -269,18 +282,82 @@ class BridgeService : Service() {
     // ------------------------------------------------------------------ the self-test
 
     /** The firmware drawing over the whole screen for a while, with no Obsidian involved. */
-    private fun startTest() {
+    private fun startTest(feature: Int) {
+        endAppTest()
+        testFeature = feature
         testUntil = System.currentTimeMillis() + TEST_MS
-        applied = null
-        applyNow()
+        penHovers = 0
+        penStrokes = 0
+        touchEvents = 0
+        if (feature == TouchHelper.FEATURE_SF_TOUCH_RENDER) {
+            applied = null
+            applyNow()
+        } else {
+            startAppTest(feature)
+        }
         report()
         main.postDelayed({
             if (!isTesting) {
+                endAppTest()
                 applied = null
                 applyNow()
                 report()
             }
         }, TEST_MS + 100)
+    }
+
+    /** A test where this window takes the pen and hands its events to the firmware drawing. */
+    private fun startAppTest(feature: Int) {
+        val v = overlay ?: return
+        // the firmware-reader helper steps aside for the test
+        closeRaw()
+        setTouchable(true)
+        val h = try {
+            TouchHelper.create(v, feature, callback)
+        } catch (e: Throwable) {
+            error = "Test ${testNameOf(feature)}: ${e.javaClass.simpleName} ${e.message ?: ""}"
+            null
+        } ?: return
+        testHelper = h
+        v.setOnTouchListener { _, e ->
+            touchEvents++
+            try {
+                h.onTouchEvent(e)
+            } catch (_: Throwable) {
+            }
+            true
+        }
+        try {
+            h.openRawDrawing()
+            h.setLimitRect(Rect(0, 0, overlayW, overlayH), emptyList())
+            h.setRawInputReaderEnable(true)
+            h.setRawDrawingEnabled(true)
+            h.setStrokeStyle(BridgeState.STYLE_PENCIL)
+            h.setStrokeColor(0xFF000000.toInt())
+            h.setStrokeWidth(3f)
+        } catch (e: Throwable) {
+            error = "Test ${testNameOf(feature)}: ${e.javaClass.simpleName} ${e.message ?: ""}"
+        }
+    }
+
+    private fun endAppTest() {
+        val h = testHelper ?: return
+        testHelper = null
+        runCatching {
+            h.setRawDrawingEnabled(false)
+            h.closeRawDrawing()
+        }
+        overlay?.setOnTouchListener(null)
+        setTouchable(false)
+        // back to the firmware's own reader
+        openRaw()
+    }
+
+    private fun setTouchable(on: Boolean) {
+        val v = overlay ?: return
+        val lp = v.layoutParams as? WindowManager.LayoutParams ?: return
+        lp.flags = if (on) lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv() else lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        runCatching { wm.updateViewLayout(v, lp) }
     }
 
     // ------------------------------------------------------------------ firmware drawing
@@ -317,13 +394,15 @@ class BridgeService : Service() {
 
     /** The firmware request now: the self-test, the plugin's state, or nothing. */
     private fun request(now: Long): FirmwareRequest? {
-        if (testUntil > now && overlayW > 0) {
+        if (testUntil > now && overlayW > 0 && testFeature == TouchHelper.FEATURE_SF_TOUCH_RENDER) {
             return FirmwareRequest(PxRect(0, 0, overlayW, overlayH), emptyList(), PenSpec(BridgeState.STYLE_PENCIL, 3f, 0xFF000000.toInt()), 1000, true)
         }
         return firmwareRequest(state, calibration, overlayW, overlayH, now)
     }
 
     private fun applyNow() {
+        // a test that takes the pen is running: it has the window to itself
+        if (testHelper != null) return
         val h = helper ?: return
         if (!rawOpen) openRaw()
         if (!rawOpen) return
@@ -471,6 +550,16 @@ class BridgeService : Service() {
         private const val LEASE_CHECK_MS = 500L
         private const val STATUS_EVERY_MS = 5_000L
         const val TEST_MS = 30_000L
+        const val EXTRA_FEATURE = "feature"
+        /** TouchHelper.FEATURE_APP_PEN_TOUCH_RENDER (SDK 1.5.9). */
+        const val FEATURE_APP_PEN = 4
+
+        fun testNameOf(feature: Int) = when (feature) {
+            TouchHelper.FEATURE_SF_TOUCH_RENDER -> "1 (firmware reads the pen)"
+            FEATURE_APP_PEN -> "2 (Bridge hands on the pen, pen mode)"
+            TouchHelper.FEATURE_APP_TOUCH_RENDER -> "3 (Bridge hands on the pen, touch mode)"
+            else -> "$feature"
+        }
 
         @Volatile
         var instance: BridgeService? = null

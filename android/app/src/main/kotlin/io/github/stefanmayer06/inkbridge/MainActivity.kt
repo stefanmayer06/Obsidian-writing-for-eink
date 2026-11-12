@@ -71,15 +71,20 @@ class MainActivity : Activity() {
         col.addView(button("Add a vault folder…") { pickVault() })
         startStop = button("Start") { toggle() }
         col.addView(startStop)
+        col.addView(text("Tests", 20f, bold = true))
         col.addView(
             text(
-                "Test: turns the firmware drawing on over the whole screen for 30 seconds, without Obsidian. " +
-                    "Write anywhere (on this screen too): the ink should follow the pen with no lag.",
+                "Each test turns the firmware drawing on over the whole screen for 30 seconds, without Obsidian. " +
+                    "Write anywhere (on this screen too): the ink should follow the pen with no lag. " +
+                    "Test 1 is how instant ink works. Tests 2 and 3 try other ways for tablets where test 1 shows only hovers " +
+                    "(during them, this window takes all touches for 30 seconds).",
                 15f,
             ),
         )
-        testButton = button("Test instant ink (30 s)") { test() }
+        testButton = button("Test 1: the firmware reads the pen (30 s)") { test(com.onyx.android.sdk.pen.TouchHelper.FEATURE_SF_TOUCH_RENDER) }
         col.addView(testButton)
+        col.addView(button("Test 2: the Bridge hands on the pen, pen mode (30 s)") { test(BridgeService.FEATURE_APP_PEN) })
+        col.addView(button("Test 3: the Bridge hands on the pen, touch mode (30 s)") { test(com.onyx.android.sdk.pen.TouchHelper.FEATURE_APP_TOUCH_RENDER) })
         col.addView(text("Status", 20f, bold = true))
         status = text("", 15f)
         col.addView(status)
@@ -217,14 +222,16 @@ class MainActivity : Activity() {
         startForegroundService(Intent(this, BridgeService::class.java))
     }
 
-    private fun test() {
+    private fun test(feature: Int) {
         if (!ready()) {
             refreshSteps()
             return
         }
         if (BridgeService.instance == null) start()
-        // the service may still be starting: ask again shortly
-        handler.postDelayed({ startService(Intent(this, BridgeService::class.java).setAction(BridgeService.ACTION_TEST)) }, 600)
+        // the service may still be starting: ask shortly after
+        handler.postDelayed({
+            startService(Intent(this, BridgeService::class.java).setAction(BridgeService.ACTION_TEST).putExtra(BridgeService.EXTRA_FEATURE, feature))
+        }, 600)
     }
 
     private fun stop() {
@@ -236,7 +243,7 @@ class MainActivity : Activity() {
         val svc = BridgeService.instance
         startStop.text = if (svc != null) "Stop the Bridge" else "Start the Bridge"
         startStop.isEnabled = svc != null || ready()
-        testButton.text = if (svc?.isTesting == true) "Testing… write anywhere" else "Test instant ink (30 s)"
+        testButton.text = "Test 1: the firmware reads the pen (30 s)"
         status.text = if (svc == null) {
             "Not running."
         } else {
@@ -253,13 +260,14 @@ class MainActivity : Activity() {
                 append("\n")
                 append(
                     when {
-                        svc.isTesting -> "Instant ink: TEST – on over the whole screen."
+                        svc.isTesting -> "TEST ${svc.testName} running – write anywhere."
                         svc.isArmed -> "Instant ink: on (pen over the ink page)."
                         else -> "Instant ink: waiting (no ink page with the pen tool open)."
                     },
                 )
                 append("\n")
                 append("Firmware pen reader: ${svc.penHovers} hover(s), ${svc.penStrokes} stroke(s) seen.")
+                if (svc.touchEvents > 0) append(" Pen events to the Bridge: ${svc.touchEvents}.")
                 append("\n")
                 append(if (svc.isCalibrated) "Position: measured." else "Position: estimated. It is measured from your first strokes.")
                 svc.lastError?.let { append("\nProblem: $it") }
