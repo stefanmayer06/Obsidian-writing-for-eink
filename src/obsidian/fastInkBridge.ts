@@ -57,6 +57,8 @@ const STATUS_FRESH_MS = 15_000;
 const BRIDGE_SEEN_MS = 24 * 60 * 60 * 1000;
 const SOCKET_RETRY_MS = 30_000;
 const SOCKET_RETRY_SLOW_MS = 5 * 60_000;
+/** A repaint after the page was drawn again waits until the drawing settles (an erase gesture redraws many times). */
+const REFRESH_SETTLE_MS = 250;
 
 const NO_INPUTS: FastInkInputs = { ready: false, region: null, exclude: [], pen: null, dpr: 1, refreshMs: 800, sideButtonErases: true };
 
@@ -163,6 +165,10 @@ export class FastInkBridge {
   private bridgeStatus: FastInkStatus | null = null;
   private statusVia: "socket" | "file" | null = null;
   private observer: MutationObserver | null = null;
+  /** Watches the active ink page for its cards and panels coming and going. */
+  private viewObserver: MutationObserver | null = null;
+  private observedEl: HTMLElement | null = null;
+  private refreshTimer: number | null = null;
   private destroyed = false;
   /**
    * What happened on the ink page the last time it was on screen, for the settings (which
@@ -240,6 +246,8 @@ export class FastInkBridge {
     if (this.sent?.armed) this.transmit({ ...this.sent, seq: ++this.seq, armed: false, until: Date.now() });
     this.destroyed = true;
     this.observer?.disconnect();
+    this.viewObserver?.disconnect();
+    if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
     if (this.frame) cancelAnimationFrame(this.frame);
     const ws = this.socket;
     this.socket = null;
@@ -271,6 +279,32 @@ export class FastInkBridge {
     this.send(true);
   }
 
+  /**
+   * The page was drawn again (erasing, undo, a page turn, zoom): once that settles, the Bridge
+   * repaints the page from what Obsidian shows (the firmware's layer would hide the change).
+   */
+  refreshSoon(): void {
+    if (!this.enabled || !this.sent?.armed) return;
+    if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
+    this.refreshTimer = window.setTimeout(() => {
+      this.refreshTimer = null;
+      if (this.destroyed || !this.sent?.armed) return;
+      this.clearCount++;
+      this.send(true);
+    }, REFRESH_SETTLE_MS);
+  }
+
+  /** Follow the active ink page's own changes (its pen cards and panels open and close inside it). */
+  private watchView(view: FastInkView | null): void {
+    const el = view?.containerEl ?? null;
+    if (el === this.observedEl) return;
+    this.viewObserver?.disconnect();
+    this.observedEl = el;
+    if (!el) return;
+    this.viewObserver ??= new MutationObserver(() => this.update());
+    this.viewObserver.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style", "hidden"] });
+  }
+
   // ------------------------------------------------------------------ sending
 
   /** The Bridge app has reported recently enough to be worth writing to. */
@@ -291,6 +325,7 @@ export class FastInkBridge {
     if (this.destroyed) return;
     const now = Date.now();
     const view = this.enabled ? this.activeView() : null;
+    this.watchView(view);
     const surface = view?.surface;
     // while the pen writes, nothing about the page changes: only renew the lease
     if (surface?.input.busy && this.sent) {

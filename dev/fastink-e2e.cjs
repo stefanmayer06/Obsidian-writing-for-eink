@@ -141,14 +141,25 @@ function startBridge() {
     const strokes = await page.evaluate(() => window.surface.page.strokes.length);
     check("the plugin still records the stroke itself", strokes === 1, `strokes: ${strokes}`);
 
+    // undo redraws the page: once it settles, the Bridge is asked to repaint (one request, not one per redraw)
+    const clearsBefore = (await last())?.clears ?? 0;
+    await page.evaluate(() => window.surface.undo());
+    f = await waitFw((m) => m.clears > clearsBefore);
+    check("undo: the Bridge repaints the page from Obsidian's drawing", f && f.clears === clearsBefore + 1, `clears ${clearsBefore} → ${f?.clears}`);
+    await page.evaluate(() => window.surface.redo());
+    await page.waitForTimeout(400);
+
     // the pen card over the page is left out of the firmware's area
+    const tCard = Date.now();
     await page.click(".ink-tool-pen");
     await page.waitForSelector(".ink-pop-pen", { state: "visible" });
     const card = await page.evaluate(() => {
       const r = document.querySelector(".ink-pop-pen").getBoundingClientRect();
       return { x: r.left, y: r.top, w: r.width, h: r.height };
     });
-    f = await waitFw((m) => m.armed && m.exclude.length > 0);
+    f = await waitFw((m) => m.armed && m.exclude.length > 0, 5000);
+    const cardMs = Date.now() - tCard;
+    check("…and the Bridge hears of the card at once (not at the next check a second later)", cardMs < 700, `${cardMs} ms`);
     const cardTop = Math.max(Math.floor(card.y), Math.ceil(box.y)) * DPR + SCREEN_Y - 4;
     const ex = f?.exclude?.find((r) => Math.abs(r[0] - (Math.floor(card.x) * DPR - 4)) <= 2);
     check("the open pen card is left out (never ink over the card)", !!ex && Math.abs(ex[1] - cardTop) <= 2, `${JSON.stringify(f?.exclude)} card ${JSON.stringify(card)}`);

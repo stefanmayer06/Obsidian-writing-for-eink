@@ -523,12 +523,14 @@ export class InkSurface {
     }
     this.schedulePreload();
     this.host.viewChanged?.();
+    this.host.pageRedrawn?.();
   }
 
   /** Redraw a part of the page (page units). */
   renderRect(r: Rect): void {
     if (this.width === 0) return;
     this.paint(this.bctx, this.page, inflate(r, 2));
+    this.host.pageRedrawn?.();
   }
 
   /** Redraw soon (e.g. after an image finished loading). */

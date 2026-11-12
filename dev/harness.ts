@@ -92,6 +92,7 @@ const surface = new InkSurface(root, {
   viewChanged: () => fastInk?.update(),
   penDown: (x, y) => fastInk?.penDown(x, y),
   inkDiscarded: () => fastInk?.discard(),
+  pageRedrawn: () => fastInk?.refreshSoon(),
 });
 toolbar = new Toolbar(root, surface, {
   icon,

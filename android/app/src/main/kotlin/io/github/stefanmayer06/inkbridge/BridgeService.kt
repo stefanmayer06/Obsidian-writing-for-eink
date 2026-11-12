@@ -439,18 +439,33 @@ class BridgeService : Service() {
         h.setStrokeWidth(r.pen.width)
     }
 
-    /** The last stroke was not ink after all: take the firmware's ink off the page now. */
+    /**
+     * The plugin changed the page in a way the firmware's ink does not show (the stroke was not ink
+     * after all, something was erased, undone, the page turned): repaint the page from what
+     * Obsidian shows. Only a repaint: switching the firmware layer off and on makes the panel
+     * redraw the whole area with a visible flash.
+     */
     private fun clearInk() {
-        val h = helper ?: return
         val v = overlay ?: return
         val a = applied ?: return
         try {
-            h.setRawDrawingRenderEnabled(false)
             EpdController.handwritingRepaint(v, a.limit.toRect())
         } catch (_: Throwable) {
         }
-        // drawing comes back when the pen next comes near the screen (onPenActive)
     }
+
+    /** A rectangle of the overlay grown by a few pixels and kept on it. */
+    private fun grown(r: RectF): Rect = Rect(
+        (r.left - 6).toInt().coerceAtLeast(0),
+        (r.top - 6).toInt().coerceAtLeast(0),
+        (r.right + 6).toInt().coerceAtMost(overlayW),
+        (r.bottom + 6).toInt().coerceAtMost(overlayH),
+    )
+
+    /** A pen-up refresh is waiting for the main thread (they are coalesced). */
+    private val penUpPending = java.util.concurrent.atomic.AtomicReference<RectF?>(null)
+    /** A "pen near the screen" check is waiting for the main thread (hovers come hundreds of times a second). */
+    private val hoverPending = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private val callback = object : RawInputCallback() {
         override fun onBeginRawDrawing(b: Boolean, p: TouchPoint?) {
@@ -470,28 +485,41 @@ class BridgeService : Service() {
         override fun onRawErasingTouchPointMoveReceived(p: TouchPoint?) {}
         override fun onRawErasingTouchPointListReceived(list: TouchPointList?) {}
 
-        // as in Boox Rapid Draw: drawing on when the pen comes near the screen ...
+        // The pen is near the screen. This comes hundreds of times a second while the pen hovers:
+        // at most one check waits for the main thread, and it only turns the firmware's layer
+        // back on when something turned it off (a flood of firmware calls here held up the
+        // plugin's pen and colour changes for seconds).
         override fun onPenActive(point: TouchPoint?) {
             penHovers++
+            if (!hoverPending.compareAndSet(false, true)) return
             main.post {
+                hoverPending.set(false)
                 val h = helper ?: return@post
                 val r = applied ?: return@post
-                if (!enabled) return@post
+                if (!enabled || h.isRawDrawingRenderEnabled) return@post
                 try {
-                    h.setRawDrawingEnabled(true)
+                    h.setRawDrawingRenderEnabled(true)
                     setPen(h, r)
                 } catch (_: Throwable) {
                 }
             }
         }
 
-        // ... and the firmware's layer off once the area was refreshed after the pen was lifted
+        // The pen was lifted and the page is still: show Obsidian's own drawing of the strokes in
+        // the area the firmware drew on, and nowhere else. (Boox Rapid Draw turns the firmware's
+        // layer off here, which repaints the whole area with a flash after every stroke.)
         override fun onPenUpRefresh(refreshRect: RectF?) {
-            try {
-                if (enabled) helper?.setRawDrawingRenderEnabled(false)
-            } catch (_: Throwable) {
+            val rect = refreshRect ?: return
+            penUpPending.set(RectF(rect))
+            main.post {
+                val r = penUpPending.getAndSet(null) ?: return@post
+                val v = overlay ?: return@post
+                if (!enabled) return@post
+                try {
+                    EpdController.handwritingRepaint(v, grown(r))
+                } catch (_: Throwable) {
+                }
             }
-            super.onPenUpRefresh(refreshRect)
         }
     }
 
