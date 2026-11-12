@@ -70,6 +70,8 @@ export interface FastInkInputs {
   dpr: number;
   refreshMs: number;
   sideButtonErases: boolean;
+  /** Why the page cannot take instant ink now, in words (null when it can). */
+  reason?: string | null;
 }
 
 /**

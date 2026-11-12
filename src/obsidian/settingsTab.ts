@@ -56,6 +56,18 @@ export class InkSettingTab extends PluginSettingTab {
   /** Where instant ink stands, in words. */
   private fastInkStatus(): string {
     const b = this.plugin.fastInk;
+    const page = b.onPage;
+    let onPage = "";
+    if (page && b.connection !== "off") {
+      onPage = page.armed
+        ? ` On the ink page: instant ink was on – ${page.bridgeDrew ? "the Bridge was drawing" : "but the Bridge had not reported drawing"}, ${page.strokes} stroke(s) written since.`
+        : ` On the ink page: instant ink was off – ${page.reason ?? "unknown"}.`;
+    }
+    return this.fastInkConnection() + onPage;
+  }
+
+  private fastInkConnection(): string {
+    const b = this.plugin.fastInk;
     switch (b.connection) {
       case "off":
         return this.plugin.settings.fastInk === "off"

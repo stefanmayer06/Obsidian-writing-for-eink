@@ -159,6 +159,8 @@ function startBridge() {
     await page.evaluate(() => window.surface.setTools({ tool: "lasso" }));
     f = await waitFw((m) => !m.armed);
     check("lasso: the firmware stops drawing", f && !f.armed);
+    const why = await page.evaluate(() => window.fastInk().onPage);
+    check("…and the settings can say why", !why?.armed && /lasso tool/.test(why?.reason ?? ""), JSON.stringify(why));
     await page.evaluate(() => window.surface.setTools({ tool: "marker" }));
     await page.waitForTimeout(300);
     f = await last();
@@ -174,10 +176,33 @@ function startBridge() {
     await page.evaluate(() => window.surface.resetZoom());
     await page.evaluate(() => window.surface.setTools({ pen: "fountain", color: "#000000" }));
 
+    // Obsidian keeps some pop-ups in the page while they are closed: they must not count
+    await page.evaluate(() => {
+      for (const cls of ["suggestion-container", "prompt", "menu"]) {
+        const d = document.createElement("div");
+        d.className = `${cls} hidden-popup`;
+        d.style.display = "none";
+        document.body.appendChild(d);
+      }
+    });
+    await page.waitForTimeout(400);
+    f = await last();
+    const page1 = await page.evaluate(() => window.fastInk().onPage);
+    check("closed Obsidian pop-ups left in the page do not stop instant ink", f?.armed && page1?.armed, JSON.stringify(page1));
+    await page.evaluate(() => document.querySelectorAll(".hidden-popup").forEach((d) => d.remove()));
+
     // something of Obsidian's over the page: a modal, a sidebar
-    await page.evaluate(() => document.body.appendChild(Object.assign(document.createElement("div"), { className: "modal-container" })));
+    // like Obsidian's: it covers the whole window
+    await page.evaluate(() => {
+      const m = document.createElement("div");
+      m.className = "modal-container";
+      m.style.cssText = "position:fixed;inset:0;z-index:60";
+      document.body.appendChild(m);
+    });
     f = await waitFw((m) => !m.armed);
     check("an Obsidian modal is open: the firmware stops", f && !f.armed);
+    const why2 = await page.evaluate(() => window.fastInk().onPage);
+    check("…and the settings say an Obsidian window is open", /modal-container/.test(why2?.reason ?? ""), JSON.stringify(why2));
     await page.evaluate(() => document.querySelector(".modal-container").remove());
     f = await waitFw((m) => m.armed);
     check("…and draws again when it closes", f?.armed);

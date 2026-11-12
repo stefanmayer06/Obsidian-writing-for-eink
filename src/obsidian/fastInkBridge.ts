@@ -3,6 +3,7 @@ import type InkNotebookPlugin from "../main";
 import {
   buildMessage,
   fastInkPen,
+  isArmed,
   parseStatus,
   sameRequest,
   type CssRect,
@@ -68,6 +69,17 @@ function rectOf(r: DOMRect): CssRect {
   return { x: r.left, y: r.top, w: r.width, h: r.height };
 }
 
+/** An element in a few words, for "why is instant ink off" (e.g. "div.workspace-drawer.mod-left"). */
+function describe(el: Element): string {
+  const cls = Array.from(el.classList).slice(0, 3).join(".");
+  return `${el.tagName.toLowerCase()}${cls ? `.${cls}` : ""}`;
+}
+
+/** On screen: laid out with a size (not display: none, not empty). */
+function shown(el: Element): boolean {
+  return Array.from(el.getClientRects()).some((r) => r.width > 0 && r.height > 0);
+}
+
 function isEditable(el: Element | null): boolean {
   if (!el) return false;
   if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return true;
@@ -88,11 +100,19 @@ export function measureInkPage(surface: InkSurface, opts: { refreshMs: number; s
   });
   const t = surface.tools;
   const pen = t.tool === "pen" ? fastInkPen(t.pen, t.widths[t.pen], t.color, surface.view.scale, dpr) : null;
-  let ready = doc.visibilityState === "visible" && !!region && !!pen;
-  if (ready && doc.querySelector(BLOCKING_SELECTOR)) ready = false;
+  let reason: string | null = null;
+  if (!region) reason = "the page is not on screen";
+  else if (doc.visibilityState !== "visible") reason = "Obsidian is in the background";
+  else if (!pen) reason = t.tool === "pen" ? "this pen has no instant ink" : `the ${t.tool} tool is selected (instant ink is for the pens)`;
+  if (!reason) {
+    // an Obsidian window or menu that is really open (one left hidden in the page does not count)
+    const blocking = Array.from(doc.querySelectorAll(BLOCKING_SELECTOR)).find(shown);
+    if (blocking) reason = `an Obsidian window or menu is open (${describe(blocking)})`;
+  }
   // typing somewhere else (the keyboard is up); an editor left focused in a hidden tab does not count
   const active = doc.activeElement;
-  if (ready && isEditable(active) && !surface.el.contains(active) && active instanceof HTMLElement && active.getClientRects().length > 0) ready = false;
+  if (!reason && active && isEditable(active) && !surface.el.contains(active) && shown(active)) reason = `typing in ${describe(active)}`;
+  let ready = !reason;
   // something else lies over the page: a small thing (a floating button) is left out of the
   // drawing area, a big one (a sidebar, a pop-up the plugin does not know) stops instant ink
   if (ready && region) {
@@ -107,13 +127,20 @@ export function measureInkPage(surface: InkSurface, opts: { refreshMs: number; s
         if (seen.has(hit)) continue;
         seen.add(hit);
         const r = hit.getBoundingClientRect();
-        if (r.width * r.height > 0.25 * region.w * region.h) covered = n * n;
-        else exclude.push(rectOf(r));
+        if (r.width * r.height > 0.25 * region.w * region.h) {
+          covered = n * n;
+          reason = `something covers the page (${describe(hit)})`;
+        } else {
+          exclude.push(rectOf(r));
+        }
       }
     }
-    if (covered > (n * n) / 4) ready = false;
+    if (covered > (n * n) / 4) {
+      ready = false;
+      reason ??= "things cover much of the page";
+    }
   }
-  return { ready, region, exclude, pen, dpr, refreshMs: opts.refreshMs, sideButtonErases: opts.sideButtonErases };
+  return { ready, region, exclude, pen, dpr, refreshMs: opts.refreshMs, sideButtonErases: opts.sideButtonErases, reason };
 }
 
 export class FastInkBridge {
@@ -137,6 +164,11 @@ export class FastInkBridge {
   private statusVia: "socket" | "file" | null = null;
   private observer: MutationObserver | null = null;
   private destroyed = false;
+  /**
+   * What happened on the ink page the last time it was on screen, for the settings (which
+   * cover the page themselves, so they cannot look now).
+   */
+  onPage: { at: number; armed: boolean; reason: string | null; strokes: number; bridgeDrew: boolean } | null = null;
   /** Called when the connection or the Bridge's status changes (the settings tab shows it). */
   onChange: (() => void) | null = null;
 
@@ -227,6 +259,7 @@ export class FastInkBridge {
   /** The pen touched the page; the Bridge uses this to measure where the window is. */
   penDown(x: number, y: number): void {
     if (!this.enabled || !this.sent?.armed) return;
+    if (this.onPage?.armed) this.onPage.strokes++;
     this.down = { x, y, t: Date.now() };
     if (!this.bridgeStatus?.calibrated) this.update();
   }
@@ -265,10 +298,8 @@ export class FastInkBridge {
       return;
     }
     const s = this.plugin.settings;
-    const inputs =
-      surface && view.containerEl.isShown()
-        ? measureInkPage(surface, { refreshMs: s.fastInkRefreshMs, sideButtonErases: s.sideButton !== "none" })
-        : NO_INPUTS;
+    const inputs = surface ? measureInkPage(surface, { refreshMs: s.fastInkRefreshMs, sideButtonErases: s.sideButton !== "none" }) : NO_INPUTS;
+    this.notePage(inputs);
     const msg = buildMessage(inputs, { seq: this.seq + 1, now, leaseMs: this.leaseMs(), clear: this.clearCount, down: this.down });
     const unchanged = sameRequest(this.sent, msg);
     if (!force && unchanged && !msg.down) return;
@@ -279,6 +310,18 @@ export class FastInkBridge {
     this.seq = msg.seq;
     this.down = null;
     this.transmit(msg);
+  }
+
+  /** Remember how the page was for the settings, unless the settings (or another app) are what covers it. */
+  private notePage(inputs: FastInkInputs): void {
+    if (!this.activeView() || document.visibilityState !== "visible" || document.querySelector(".mod-settings")) return;
+    const armed = isArmed(inputs);
+    const before = this.onPage;
+    if (before && before.armed === armed && before.reason === (inputs.reason ?? null)) {
+      before.at = Date.now();
+      return;
+    }
+    this.onPage = { at: Date.now(), armed, reason: inputs.reason ?? null, strokes: 0, bridgeDrew: false };
   }
 
   private transmit(msg: FastInkMessage): void {
@@ -363,6 +406,7 @@ export class FastInkBridge {
     const wasSeen = this.bridgeSeen();
     this.bridgeStatus = s;
     this.statusVia = via;
+    if (s.armed && this.sent?.armed && this.onPage?.armed) this.onPage.bridgeDrew = true;
     // the Bridge just appeared: tell it about the page now
     if (!wasSeen && this.bridgeSeen()) this.update();
     if (before !== this.connection || calibratedBefore !== s.calibrated) this.onChange?.();
