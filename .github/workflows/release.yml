@@ -69,6 +69,8 @@ jobs:
   # (public, so that every test build still installs over the previous one).
   bridge:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bridge-version.outputs.version }}
     defaults:
       run:
         working-directory: android
@@ -95,11 +97,17 @@ jobs:
           BRIDGE_KEY_ALIAS: ${{ secrets.BRIDGE_KEY_ALIAS }}
           BRIDGE_KEY_PASSWORD: ${{ secrets.BRIDGE_KEY_PASSWORD }}
         run: ./gradlew --no-daemon testDebugUnitTest assembleRelease
-      - run: cp app/build/outputs/apk/release/app-release.apk ink-notebook-bridge.apk
+      - name: Bridge version
+        id: bridge-version
+        run: echo "version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
+      # also under a name with the version, so a download is never an old file of the same name
+      - run: |
+          cp app/build/outputs/apk/release/app-release.apk ink-notebook-bridge.apk
+          cp app/build/outputs/apk/release/app-release.apk "ink-notebook-bridge-${{ steps.bridge-version.outputs.version }}.apk"
       - uses: actions/upload-artifact@v4
         with:
           name: ink-notebook-bridge
-          path: android/ink-notebook-bridge.apk
+          path: android/ink-notebook-bridge*.apk
 
   release:
     needs: [build, bridge]
@@ -153,7 +161,7 @@ jobs:
             main.js
             manifest.json
             styles.css
-            ink-notebook-bridge.apk
+            ink-notebook-bridge*.apk
 
   test-build:
     needs: [build, bridge]
@@ -180,12 +188,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: test-build
-          name: Test build of ${{ github.ref_name }} (not a release)
+          name: Test build of ${{ github.ref_name }} – Ink Notebook Bridge ${{ needs.bridge.outputs.version }} (not a release)
           target_commitish: ${{ github.sha }}
           prerelease: true
           make_latest: false
           body: |
             A test build of the branch `${{ github.ref_name }}` (${{ github.sha }}) – not a release, and not for general use.
+
+            **Ink Notebook Bridge ${{ needs.bridge.outputs.version }}** (instant ink on Boox): `ink-notebook-bridge-${{ needs.bridge.outputs.version }}.apk` (the same file as `ink-notebook-bridge.apk`). It installs over earlier test builds of the Bridge.
 
             Only those who choose it get it: install it with BRAT (*Settings → BRAT → Add beta plugin*, `${{ github.repository }}`, version `test-build`). Users of the released plugin – from Obsidian's community plugins or with BRAT's latest version – stay on the latest release.
 
@@ -194,4 +204,4 @@ jobs:
             main.js
             manifest.json
             styles.css
-            ink-notebook-bridge.apk
+            ink-notebook-bridge*.apk
