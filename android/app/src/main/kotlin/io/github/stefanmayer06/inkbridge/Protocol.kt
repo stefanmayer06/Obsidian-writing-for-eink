@@ -41,9 +41,19 @@ data class BridgeState(
     /** Increased by the plugin when the last stroke was not ink (link tap, snapped shape, scribble erase). */
     val clear: Long,
     val down: PenDown?,
+    /** Wall clock ms when the plugin sent this (0 from older plugins). */
+    val at: Long = 0,
+    /** Increased by the plugin when something other than the page is pressed (before that press changes anything). */
+    val ui: Long = 0,
 ) {
     /** The firmware should draw now. */
     fun live(now: Long): Boolean = armed && until > now && region != null && !region.isEmpty
+
+    /** The plugin still holds its lease (armed or not): its page is open, and it may arm at any moment. */
+    fun leased(now: Long): Boolean = until > now
+
+    /** The same request for the screen (the page, what covers it, the pen); lease, counters and pen-down aside. */
+    fun sameScreen(o: BridgeState?): Boolean = o != null && armed == o.armed && region == o.region && exclude == o.exclude && pen == o.pen
 
     companion object {
         const val VERSION = 1
@@ -123,6 +133,8 @@ data class BridgeState(
                     sideButtonErases = o.optBoolean("sideButtonErases", true),
                     clear = o.optLong("clear", 0),
                     down = down?.let { PenDown(it.optDouble("x").toFloat(), it.optDouble("y").toFloat(), it.optLong("t")) },
+                    at = o.optLong("at", 0),
+                    ui = o.optLong("ui", 0),
                 )
             }
         } catch (e: Exception) {
@@ -140,6 +152,8 @@ data class BridgeState(
             seq: Long,
             penHovers: Int = 0,
             penStrokes: Int = 0,
+            /** Why the firmware is paused although armed (the pen is over a toolbar, …), or null. */
+            paused: String? = null,
         ): String = JSONObject()
             .put("v", VERSION)
             .put("type", "status")
@@ -153,11 +167,12 @@ data class BridgeState(
             .put("penHovers", penHovers)
             .put("penStrokes", penStrokes)
             .apply { if (error != null) put("error", error) }
+            .apply { if (armed && paused != null) put("paused", paused) }
             .toString()
     }
 }
 
 /** The app version without depending on generated BuildConfig in unit tests. */
 object BuildConfigInfo {
-    const val VERSION_NAME = "0.6.0"
+    const val VERSION_NAME = "0.7.0"
 }

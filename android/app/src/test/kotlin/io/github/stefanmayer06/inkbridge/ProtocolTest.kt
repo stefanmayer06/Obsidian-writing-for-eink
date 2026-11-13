@@ -37,6 +37,35 @@ class ProtocolTest {
     }
 
     @Test
+    fun readsWhenItWasSentAndThePresses() {
+        val s = BridgeState.parse(message)!!
+        // from plugins before 2.4: none
+        assertEquals(0L, s.at)
+        assertEquals(0L, s.ui)
+        val t = BridgeState.parse(message.replace("\"clear\":3,", "\"clear\":3,\"at\":123456,\"ui\":7,"))!!
+        assertEquals(123456L, t.at)
+        assertEquals(7L, t.ui)
+    }
+
+    @Test
+    fun tellsScreenChangesFromRenewals() {
+        val s = BridgeState.parse(message)!!
+        assertTrue(s.sameScreen(s.copy(seq = 43, until = 9000, at = 5, ui = 1, clear = 4, down = null)))
+        assertFalse(s.sameScreen(null))
+        assertFalse(s.sameScreen(s.copy(exclude = emptyList())))
+        assertFalse(s.sameScreen(s.copy(pen = s.pen.copy(width = 6f))))
+        assertFalse(s.sameScreen(s.copy(armed = false)))
+    }
+
+    @Test
+    fun leasedArmedOrNot() {
+        val s = BridgeState.parse(message)!!.copy(armed = false)
+        assertTrue(s.leased(4999))
+        assertFalse(s.live(4999))
+        assertFalse(s.leased(5000))
+    }
+
+    @Test
     fun liveOnlyWhileTheLeaseHolds() {
         val s = BridgeState.parse(message)!!
         assertTrue(s.live(4999))

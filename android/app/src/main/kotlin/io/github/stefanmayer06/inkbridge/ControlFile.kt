@@ -3,6 +3,7 @@ package io.github.stefanmayer06.inkbridge
 import android.content.Context
 import android.os.Environment
 import android.os.Handler
+import android.os.FileObserver
 import android.os.HandlerThread
 import java.io.File
 
@@ -12,11 +13,13 @@ import java.io.File
  * class reads it whenever it changes. It needs no network at all, only file
  * access to the vault, so it works whatever Obsidian allows its WebView.
  *
- * The file is checked with a cheap stat 10 times a second while the plugin is
- * active (twice a second otherwise): reliable on every Android version, unlike
- * file change notifications on shared storage. Vaults are found by looking for
- * the plugin's folder (vault folders picked in the app first, then a shallow
- * search of the shared storage), again every 30 seconds.
+ * The file is read as soon as the system reports it written (a file observer,
+ * where shared storage reports changes), and in any case checked with a cheap
+ * stat 40 times a second while an ink page is open (4 times a second otherwise),
+ * which is reliable on every Android version. A tool change thus reaches the
+ * firmware within a few tens of milliseconds. Vaults are found by looking for the
+ * plugin's folder (vault folders picked in the app first, then a shallow search
+ * of the shared storage), again every 30 seconds.
  *
  * This app writes `status.json` next to the control file, so the plugin can show
  * that the Bridge is running.
@@ -26,8 +29,12 @@ class ControlFile(private val context: Context, private val onText: (String) -> 
     private val handler = Handler(thread.looper)
     private val seen = HashMap<File, Long>()
     private val lastText = HashMap<File, String>()
+    private var lastFullRead = 0L
+    /** One per bridge folder (kept here: an observer that is collected stops reporting). */
+    private val observers = HashMap<File, FileObserver>()
     @Volatile private var dirs: List<File> = emptyList()
     @Volatile private var stopped = false
+    /** An ink page is open (the plugin holds its lease): check often. */
     @Volatile var active = false
 
     /** The bridge folders found (for the app's screen). */
@@ -41,6 +48,7 @@ class ControlFile(private val context: Context, private val onText: (String) -> 
     fun stop() {
         stopped = true
         handler.removeCallbacksAndMessages(null)
+        handler.post { watch(emptyList()) }
         thread.quitSafely()
     }
 
@@ -74,21 +82,58 @@ class ControlFile(private val context: Context, private val onText: (String) -> 
 
     private fun scan() {
         dirs = Vaults.bridgeDirs(context)
+        watch(dirs)
+    }
+
+    /** Be told when the plugin writes (where the storage reports it; the regular check stays). */
+    @Suppress("DEPRECATION")
+    private fun watch(list: List<File>) {
+        val keep = list.toSet()
+        observers.keys.filter { it !in keep }.forEach { observers.remove(it)?.stopWatching() }
+        for (dir in list) {
+            if (dir in observers || !dir.isDirectory) continue
+            val o = object : FileObserver(dir.path, CLOSE_WRITE or MOVED_TO) {
+                override fun onEvent(event: Int, path: String?) {
+                    if (path == "state.json" && !stopped) handler.post { check(force = true) }
+                }
+            }
+            // kept even when it cannot watch, so it is not tried again on every check
+            observers[dir] = o
+            try {
+                o.startWatching()
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private fun poll() {
         if (stopped) return
+        check(force = false)
+        handler.postDelayed({ poll() }, if (active) POLL_ACTIVE_MS else POLL_IDLE_MS)
+    }
+
+    /** Read the control file if it changed (`force`: it was just reported written). */
+    private fun check(force: Boolean) {
+        if (stopped) return
+        val now = System.currentTimeMillis()
+        // now and then the text is compared too: two quick writes of the same length can share a
+        // modification time
+        val full = force || (active && now - lastFullRead >= FULL_READ_MS)
+        if (full) lastFullRead = now
         for (dir in dirs) {
             val f = File(dir, "state.json")
             val sig = try {
-                if (f.isFile) f.lastModified() * 31 + f.length() else -1L
+                val m = f.lastModified()
+                if (m > 0L) m * 31 + f.length() else -1L
             } catch (_: Exception) {
                 -1L
             }
-            if (sig == -1L) continue
-            // while the plugin is active the text is compared too: two quick writes of the same
-            // length can share a modification time
-            if (seen[f] == sig && !active) continue
+            if (sig == -1L) {
+                // the folder appeared after the last scan (the plugin made it): watch it
+                if (dir !in observers && dir.isDirectory) watch(dirs)
+                continue
+            }
+            if (seen[f] == sig && !full) continue
             seen[f] = sig
             val text = try {
                 f.readText()
@@ -104,12 +149,12 @@ class ControlFile(private val context: Context, private val onText: (String) -> 
                 seen.remove(f)
             }
         }
-        handler.postDelayed({ poll() }, if (active) POLL_ACTIVE_MS else POLL_IDLE_MS)
     }
 
     companion object {
-        private const val POLL_ACTIVE_MS = 100L
-        private const val POLL_IDLE_MS = 500L
+        private const val POLL_ACTIVE_MS = 25L
+        private const val POLL_IDLE_MS = 250L
+        private const val FULL_READ_MS = 400L
         private const val RESCAN_MS = 30_000L
         private const val RESCAN_FOUND_MS = 300_000L
     }

@@ -167,7 +167,19 @@ function startBridge() {
     await page.mouse.click(5, VIEW.height - 5);
     await page.waitForTimeout(200);
 
-    await page.evaluate(() => window.surface.setTools({ tool: "lasso" }));
+    // a pen press on a toolbar button: the Bridge hears of it the moment the press starts, before the
+    // tool changes (it pauses the firmware, so the panel shows the change at its normal speed)
+    const uiBefore = (await last())?.ui ?? 0;
+    const lassoBtn = await page.evaluate(() => {
+      const r = document.querySelector(".ink-tool-lasso").getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    });
+    const penBtn = { pointerType: "pen", button: "left", tiltX: 0, tiltY: 0 };
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: lassoBtn.x, y: lassoBtn.y, buttons: 0, force: 0, ...penBtn });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: lassoBtn.x, y: lassoBtn.y, clickCount: 1, buttons: 1, force: 0.5, ...penBtn });
+    f = await waitFw((m) => m.ui > uiBefore, 2000);
+    check("a pen press on the toolbar reaches the Bridge before the tool changes", f && f.ui === uiBefore + 1 && f.armed, JSON.stringify({ ui: f?.ui, armed: f?.armed }));
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: lassoBtn.x, y: lassoBtn.y, clickCount: 1, buttons: 0, force: 0, ...penBtn });
     f = await waitFw((m) => !m.armed);
     check("lasso: the firmware stops drawing", f && !f.armed);
     const why = await page.evaluate(() => window.fastInk().onPage);
@@ -240,7 +252,13 @@ function startBridge() {
     f = await waitFw((m) => m.armed && m.exclude.length === 0);
 
     // a stroke that is not ink after all: hold to snap turns it into a line
-    const before = f?.clears ?? 0;
+    // writing on the page is not a press elsewhere
+    const uiWriting = f?.ui ?? 0;
+    await pen(wave(150, 700));
+    await page.waitForTimeout(300);
+    check("writing on the page does not count as a press elsewhere", ((await last())?.ui ?? 0) === uiWriting, `${uiWriting} → ${(await last())?.ui}`);
+
+    const before = (await last())?.clears ?? 0;
     await pen(
       Array.from({ length: 24 }, (_, i) => ({ x: 120 + i * 12, y: 600 })),
       { holdMs: 900 },

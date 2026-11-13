@@ -46,6 +46,13 @@ export interface FastInkMessage {
   clear: number;
   /** The last pen-down (CSS pixels, wall clock ms): the Bridge measures where the window is with it. */
   down?: { x: number; y: number; t: number };
+  /** Wall clock ms when this was sent (the Bridge waits for a state sent after the pen visited a toolbar). */
+  at: number;
+  /**
+   * Counts presses on anything but the page (toolbars, cards, Obsidian), sent the moment the press
+   * starts: the firmware pauses at once, so the panel shows what the press changes without delay.
+   */
+  ui: number;
 }
 
 /** What the Bridge reports back. */
@@ -61,6 +68,8 @@ export interface FastInkStatus {
   /** What the firmware's pen reader reported to the Bridge (since it started). */
   penHovers?: number;
   penStrokes?: number;
+  /** Why the firmware is paused although instant ink is on (the pen is over a toolbar, …). */
+  paused?: string;
 }
 
 /** What the page looks like right now, measured by the view. */
@@ -149,7 +158,7 @@ export function isArmed(inputs: FastInkInputs): boolean {
 /** The message for the Bridge. */
 export function buildMessage(
   inputs: FastInkInputs,
-  opts: { seq: number; now: number; leaseMs: number; clear: number; down?: { x: number; y: number; t: number } | null },
+  opts: { seq: number; now: number; leaseMs: number; clear: number; ui?: number; down?: { x: number; y: number; t: number } | null },
 ): FastInkMessage {
   const armed = isArmed(inputs);
   const region = inputs.region ? roundIn(inputs.region) : null;
@@ -166,15 +175,17 @@ export function buildMessage(
     refreshMs: Math.round(inputs.refreshMs),
     sideButtonErases: inputs.sideButtonErases,
     clear: opts.clear,
+    at: Math.round(opts.now),
+    ui: opts.ui ?? 0,
   };
   if (opts.down) msg.down = { x: round1(opts.down.x), y: round1(opts.down.y), t: Math.round(opts.down.t) };
   return msg;
 }
 
-/** Two messages ask the Bridge for the same thing (the lease and the pen-down aside). */
+/** Two messages ask the Bridge for the same thing (the lease, the time and the pen-down aside). */
 export function sameRequest(a: FastInkMessage | null, b: FastInkMessage | null): boolean {
   if (!a || !b) return a === b;
-  const strip = (m: FastInkMessage) => JSON.stringify({ ...m, seq: 0, until: 0, down: undefined });
+  const strip = (m: FastInkMessage) => JSON.stringify({ ...m, seq: 0, until: 0, at: 0, down: undefined });
   return strip(a) === strip(b);
 }
 
@@ -196,6 +207,7 @@ export function parseStatus(text: string): FastInkStatus | null {
       error: typeof r.error === "string" ? r.error : undefined,
       penHovers: typeof r.penHovers === "number" ? r.penHovers : undefined,
       penStrokes: typeof r.penStrokes === "number" ? r.penStrokes : undefined,
+      paused: typeof r.paused === "string" ? r.paused : undefined,
     };
   } catch {
     return null;

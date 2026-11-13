@@ -20,7 +20,6 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.SurfaceView
 import android.view.WindowManager
-import com.onyx.android.sdk.api.device.epd.EpdController
 import com.onyx.android.sdk.data.note.TouchPoint
 import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
@@ -38,14 +37,17 @@ import com.onyx.android.sdk.pen.data.TouchPointList
  *
  * The TouchHelper is driven the way Boox Rapid Draw drives it, which is known to
  * work over other apps: raw drawing is opened once when the window has its size
- * (again only when the screen turns) and then only paused and resumed
- * (setRawDrawingEnabled), the drawing area is changed in place, and the pen is
- * set after every resume (opening and resuming reset it). The firmware draws
- * only while the plugin holds a lease, only inside the ink page and never over
- * the plugin's toolbars and cards.
+ * (again only when the screen turns) and then only paused and resumed, the
+ * drawing area is changed in place, and the pen is set after every resume
+ * (opening and resuming reset it). The firmware draws only while the plugin holds
+ * a lease, only inside the ink page and never over the plugin's toolbars and
+ * cards.
  *
- * When the pen is lifted and the page has been still for the refresh time, the
- * firmware refreshes the area and the plugin's own drawing of the stroke shows.
+ * While the firmware draws, the panel is in its handwriting mode and does not
+ * keep up with Obsidian's screen (a tool change or a new page would show late).
+ * So the firmware draws only while the pen is over the page: it pauses the moment
+ * the pen goes to a toolbar, something else is pressed, or the page changes, and
+ * draws again when the pen next hovers over the page ([InkGate]).
  */
 class BridgeService : Service() {
     private val main = Handler(Looper.getMainLooper())
@@ -54,8 +56,10 @@ class BridgeService : Service() {
     private var helper: TouchHelper? = null
     /** Raw drawing is open (once per overlay size). */
     private var rawOpen = false
-    /** The firmware draws now (resumed). */
+    /** Instant ink is on: the firmware's pen reader runs, and the firmware draws whenever [gate] lets it. */
     @Volatile private var enabled = false
+    /** When the firmware may draw, moment by moment (the pen over the page, nothing else changing). */
+    private val gate = InkGate()
     /** What the firmware was last asked (area, pen). */
     private var applied: FirmwareRequest? = null
     private var state: BridgeState? = null
@@ -94,6 +98,12 @@ class BridgeService : Service() {
     var lastMessageAt = 0L
         private set
     val isArmed: Boolean get() = enabled
+    /** Instant ink in words, for the app's screen. */
+    val inkState: String get() = when {
+        !enabled -> "off"
+        gate.draws -> "drawing (pen over the page)"
+        else -> "paused – ${gate.reason}"
+    }
     val isTesting: Boolean get() = testUntil > System.currentTimeMillis()
     val testName: String get() = testNameOf(testFeature)
     val isCalibrated: Boolean get() = calibration.calibrated
@@ -236,8 +246,16 @@ class BridgeService : Service() {
         if (s.seq == lastSeq && s.until == lastUntil) return
         lastSeq = s.seq
         lastUntil = s.until
+        val prev = state
         state = s
-        file?.active = s.live(lastMessageAt)
+        file?.active = s.leased(lastMessageAt)
+        // what the gate waited for (a state sent after a toolbar visit), then what this one changes
+        gate.stateSent(s.at)
+        val screenChanged = prev != null && !s.sameScreen(prev)
+        // a press elsewhere: wait for what it changes – unless that came with it (the control file
+        // keeps only the latest state, so the press and the new tool can arrive as one)
+        if (prev != null && s.ui != prev.ui && !screenChanged) gate.pressedElsewhere(s.at, lastMessageAt)
+        if (screenChanged) gate.changed()
         s.down?.let {
             if (calibration.match(it, s.dpr)) {
                 saveCalibration()
@@ -246,7 +264,7 @@ class BridgeService : Service() {
         }
         val prevClear = lastClear
         lastClear = s.clear
-        if (prevClear != null && prevClear != s.clear) clearInk()
+        if (prevClear != null && prevClear != s.clear) gate.cleared()
         applyNow()
         report()
     }
@@ -268,7 +286,7 @@ class BridgeService : Service() {
                 applyNow()
                 report()
             }
-            file?.active = live
+            file?.active = state?.leased(now) == true
             if (now - lastStatusWrite > STATUS_EVERY_MS) report(force = true)
             main.postDelayed(this, LEASE_CHECK_MS)
         }
@@ -372,11 +390,11 @@ class BridgeService : Service() {
         try {
             h.openRawDrawing()
             h.setLimitRect(Rect(0, 0, overlayW, overlayH), emptyList())
-            h.setRawInputReaderEnable(true)
-            // drawn only while the plugin asks
-            h.setRawDrawingEnabled(false)
+            // drawn only while the plugin asks: paused (opening leaves the firmware "started", not paused)
+            h.forceSetRawDrawingEnabled(false)
             rawOpen = true
             enabled = false
+            gate.disarm()
             applied = null
         } catch (e: Throwable) {
             error = "Could not open raw drawing: ${e.javaClass.simpleName} ${e.message ?: ""}"
@@ -388,6 +406,7 @@ class BridgeService : Service() {
         if (!rawOpen) return
         rawOpen = false
         enabled = false
+        gate.disarm()
         applied = null
         try {
             h.setRawDrawingEnabled(false)
@@ -415,6 +434,7 @@ class BridgeService : Service() {
             if (target == null) {
                 if (enabled) h.setRawDrawingEnabled(false)
                 enabled = false
+                gate.disarm()
                 return
             }
             val cur = applied
@@ -422,18 +442,63 @@ class BridgeService : Service() {
                 h.setLimitRect(target.limit.toRect(), target.exclude.map { it.toRect() })
             }
             if (!enabled) {
-                h.setRawDrawingEnabled(true)
+                // the pen reader runs; the firmware draws from the pen's first hover over the page
+                h.setRawInputReaderEnable(true)
+                h.resetPenDefaultRawDrawing()
                 enabled = true
+                gate.arm()
             }
-            setPen(h, target)
             if (cur?.refreshMs != target.refreshMs) h.setPenUpRefreshTimeMs(target.refreshMs)
             if (cur?.sideButton != target.sideButton) h.enableSideBtnErase(target.sideButton)
             applied = target
             error = null
+            syncInk(h, penChanged = cur?.pen != target.pen)
         } catch (e: Throwable) {
             error = "${e.javaClass.simpleName}: ${e.message ?: ""}"
             applied = null
         }
+    }
+
+    /**
+     * The firmware draws or pauses as [gate] says. Pausing takes the panel out of its handwriting
+     * mode, so it shows Obsidian's screen again (the page's own drawing of every stroke, the
+     * toolbar, cards, a new page).
+     */
+    private fun syncInk(h: TouchHelper, penChanged: Boolean = false) {
+        val want = enabled && gate.draws
+        try {
+            if (want && !h.isRawDrawingRenderEnabled) {
+                h.setRawDrawingRenderEnabled(true)
+                applied?.let { setPen(h, it) }
+            } else if (!want && h.isRawDrawingRenderEnabled) {
+                h.setRawDrawingRenderEnabled(false)
+            } else if (want && penChanged) {
+                applied?.let { setPen(h, it) }
+            }
+        } catch (e: Throwable) {
+            error = "${e.javaClass.simpleName}: ${e.message ?: ""}"
+        }
+        // a tablet whose pen reader reports no hovering: draw again a moment later instead
+        if (enabled && !want && penHovers == 0) {
+            main.removeCallbacks(releaseWithoutHover)
+            main.postDelayed(releaseWithoutHover, NO_HOVER_RELEASE_MS)
+        }
+    }
+
+    private val releaseWithoutHover = Runnable {
+        val h = helper ?: return@Runnable
+        if (!enabled || penHovers > 0) return@Runnable
+        gate.hover(InkGate.Zone.PAGE, System.currentTimeMillis())
+        syncInk(h)
+    }
+
+    /** The pen hovers at (x, y) in the overlay: over the page, its edge, or a toolbar. */
+    private fun onHover(x: Float, y: Float) {
+        val h = helper ?: return
+        val r = applied ?: return
+        if (!enabled || testHelper != null) return
+        gate.hover(zoneOf(x, y, r), System.currentTimeMillis())
+        syncInk(h)
     }
 
     /** Opening and resuming reset the pen, so it is set again after each. */
@@ -441,22 +506,6 @@ class BridgeService : Service() {
         h.setStrokeStyle(r.pen.style)
         h.setStrokeColor(r.pen.color)
         h.setStrokeWidth(r.pen.width)
-    }
-
-    /**
-     * The plugin changed the page in a way the firmware's ink does not show (the stroke was not ink
-     * after all, something was erased, undone, the page turned): the firmware's layer goes off, so
-     * the panel shows Obsidian's page, and comes back when the pen next comes near the screen.
-     * (EpdController.handwritingRepaint, tried in 0.5.0, reaches into the firmware with side
-     * effects: instant ink then worked only in part of the page and page turns lagged.)
-     */
-    private fun clearInk() {
-        val h = helper ?: return
-        if (!enabled) return
-        try {
-            h.setRawDrawingRenderEnabled(false)
-        } catch (_: Throwable) {
-        }
     }
 
     /** What the firmware is asked now, in words (for the app's screen). */
@@ -482,20 +531,34 @@ class BridgeService : Service() {
         report()
     }
 
-    /** A "pen near the screen" check is waiting for the main thread (hovers come hundreds of times a second). */
+    /** A hover from another thread waits for the main thread (hovers come hundreds of times a second: one at a time). */
     private val hoverPending = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var hoverX = 0f
+    @Volatile private var hoverY = 0f
+
+    /** Run on the main thread (the SDK calls back on it, through its view; other pen engines may not). */
+    private inline fun onMain(crossinline block: () -> Unit) {
+        if (Looper.myLooper() === Looper.getMainLooper()) block() else main.post { block() }
+    }
 
     private val callback = object : RawInputCallback() {
         override fun onBeginRawDrawing(b: Boolean, p: TouchPoint?) {
             penStrokes++
-            if (p == null) return
-            val x = p.x
-            val y = p.y
             val t = System.currentTimeMillis()
-            main.post { calibration.recordRaw(x, y, t) }
+            val x = p?.x
+            val y = p?.y
+            onMain {
+                gate.penDown()
+                if (x != null && y != null) calibration.recordRaw(x, y, t)
+            }
         }
 
-        override fun onEndRawDrawing(b: Boolean, p: TouchPoint?) {}
+        override fun onEndRawDrawing(b: Boolean, p: TouchPoint?) {
+            onMain {
+                gate.penUp()
+                helper?.let { syncInk(it) }
+            }
+        }
         override fun onRawDrawingTouchPointMoveReceived(p: TouchPoint?) {}
         override fun onRawDrawingTouchPointListReceived(list: TouchPointList?) {}
         override fun onBeginRawErasing(b: Boolean, p: TouchPoint?) {}
@@ -503,29 +566,29 @@ class BridgeService : Service() {
         override fun onRawErasingTouchPointMoveReceived(p: TouchPoint?) {}
         override fun onRawErasingTouchPointListReceived(list: TouchPointList?) {}
 
-        // The pen is near the screen. This comes hundreds of times a second while the pen hovers:
-        // at most one check waits for the main thread, and it only turns the firmware's layer
-        // back on when something turned it off (a flood of firmware calls here held up the
-        // plugin's pen and colour changes for seconds).
+        // The pen hovers. This comes hundreds of times a second: the check is cheap, and the
+        // firmware is only called when the gate changes its mind (a flood of firmware calls here
+        // once held up the plugin's pen and colour changes for seconds).
         override fun onPenActive(point: TouchPoint?) {
             penHovers++
+            val p = point ?: return
+            if (Looper.myLooper() === Looper.getMainLooper()) {
+                onHover(p.x, p.y)
+                return
+            }
+            hoverX = p.x
+            hoverY = p.y
             if (!hoverPending.compareAndSet(false, true)) return
             main.post {
                 hoverPending.set(false)
-                val h = helper ?: return@post
-                val r = applied ?: return@post
-                if (!enabled || h.isRawDrawingRenderEnabled) return@post
-                try {
-                    h.setRawDrawingRenderEnabled(true)
-                    setPen(h, r)
-                } catch (_: Throwable) {
-                }
+                onHover(hoverX, hoverY)
             }
         }
 
         // The pen was lifted: nothing to do. The firmware's ink stays where Obsidian draws the same
-        // stroke, and the page is shown afresh only when it changes otherwise (clearInk). Turning
-        // the layer off here, as Boox Rapid Draw does, repaints the whole area after every stroke.
+        // stroke until the panel shows Obsidian again (the pen goes to a toolbar, the page changes).
+        // Turning the layer off here, as Boox Rapid Draw does, repaints the whole area after every
+        // stroke.
         override fun onPenUpRefresh(refreshRect: RectF?) {}
     }
 
@@ -533,7 +596,7 @@ class BridgeService : Service() {
 
     private fun report(force: Boolean = false) {
         val c = calibration
-        val json = BridgeState.status(enabled, c.calibrated, c.offsetX, c.offsetY, transport, error, state?.seq ?: 0, penHovers, penStrokes)
+        val json = BridgeState.status(enabled, c.calibrated, c.offsetX, c.offsetY, transport, error, state?.seq ?: 0, penHovers, penStrokes, gate.reason)
         socket?.send(json)
         val key = "$enabled|${c.calibrated}|$transport|$error|$penStrokes"
         val now = System.currentTimeMillis()
@@ -583,6 +646,8 @@ class BridgeService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val PREFS = "bridge"
         private const val LEASE_CHECK_MS = 500L
+        /** Without hover reports, the firmware draws again this long after it paused. */
+        private const val NO_HOVER_RELEASE_MS = 300L
         private const val STATUS_EVERY_MS = 5_000L
         const val TEST_MS = 30_000L
         const val EXTRA_FEATURE = "feature"

@@ -57,8 +57,12 @@ const STATUS_FRESH_MS = 15_000;
 const BRIDGE_SEEN_MS = 24 * 60 * 60 * 1000;
 const SOCKET_RETRY_MS = 30_000;
 const SOCKET_RETRY_SLOW_MS = 5 * 60_000;
-/** A repaint after the page was drawn again waits until the drawing settles (an erase gesture redraws many times). */
+/** A repaint after part of the page was drawn again waits until the drawing settles (an erase gesture redraws many times). */
 const REFRESH_SETTLE_MS = 250;
+/** After the whole page was drawn again (a page turn, undo, zoom): almost at once (only what comes together is gathered). */
+const REFRESH_PAGE_MS = 30;
+/** Touches this soon after the pen moved are the palm resting on the screen, not presses. */
+const PALM_MS = 700;
 /** Pen-downs sent at once (not with the next renewal), so the Bridge can measure the page's scale. */
 const PROMPT_DOWNS = 8;
 
@@ -171,8 +175,13 @@ export class FastInkBridge {
   private viewObserver: MutationObserver | null = null;
   private observedEl: HTMLElement | null = null;
   private refreshTimer: number | null = null;
+  private refreshAt = 0;
   /** Pen-downs sent to the Bridge (the first few go at once, for measuring the page). */
   private downsSent = 0;
+  /** Presses on anything but the page (the Bridge pauses the firmware for each, see FastInkMessage.ui). */
+  private uiCount = 0;
+  /** When the pen last moved over Obsidian, writing or hovering (performance.now()). */
+  private lastPenAt = Number.NEGATIVE_INFINITY;
   private destroyed = false;
   /**
    * What happened on the ink page the last time it was on screen, for the settings (which
@@ -237,6 +246,16 @@ export class FastInkBridge {
     p.registerDomEvent(document, "focusin", () => this.update());
     p.registerDomEvent(document, "focusout", () => this.update());
     p.registerDomEvent(window, "resize", () => this.update());
+    // a press on a toolbar, a card or Obsidian: the firmware pauses before the press changes anything
+    p.registerDomEvent(document, "pointerdown", (e) => this.pressed(e), { capture: true, passive: true });
+    p.registerDomEvent(
+      document,
+      "pointermove",
+      (e) => {
+        if (e.pointerType === "pen") this.lastPenAt = performance.now();
+      },
+      { capture: true, passive: true },
+    );
     // Obsidian's menus, modals and notices come and go as children of <body>
     this.observer = new MutationObserver(() => this.update());
     this.observer.observe(document.body, { childList: true });
@@ -286,18 +305,50 @@ export class FastInkBridge {
   }
 
   /**
-   * The page was drawn again (erasing, undo, a page turn, zoom): once that settles, the Bridge
-   * repaints the page from what Obsidian shows (the firmware's layer would hide the change).
+   * The page was drawn again (`whole`: a page turn, undo, zoom; otherwise a part, as when erasing):
+   * the Bridge pauses the firmware, so the panel shows the page as Obsidian draws it (the firmware's
+   * ink would hide the change). A whole page goes almost at once, a part once the drawing settles.
    */
-  refreshSoon(): void {
+  refreshSoon(whole = false): void {
     if (!this.enabled || !this.sent?.armed) return;
-    if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
-    this.refreshTimer = window.setTimeout(() => {
-      this.refreshTimer = null;
-      if (this.destroyed || !this.sent?.armed) return;
-      this.clearCount++;
-      this.send(true);
-    }, REFRESH_SETTLE_MS);
+    const at = performance.now() + (whole ? REFRESH_PAGE_MS : REFRESH_SETTLE_MS);
+    if (this.refreshTimer !== null) {
+      // a whole page does not wait for an erase that is settling; an erase restarts the wait
+      if (whole && at >= this.refreshAt) return;
+      window.clearTimeout(this.refreshTimer);
+    }
+    this.refreshAt = at;
+    this.refreshTimer = window.setTimeout(
+      () => {
+        this.refreshTimer = null;
+        if (this.destroyed || !this.sent?.armed) return;
+        this.clearCount++;
+        this.send(true);
+      },
+      Math.max(0, at - performance.now()),
+    );
+  }
+
+  /**
+   * Something that is not the page was pressed (a toolbar button, a card, Obsidian): tell the
+   * Bridge at once, before the press changes anything, so the firmware pauses and the panel shows
+   * the change at its normal speed (the firmware's handwriting mode would hold it back).
+   */
+  private pressed(e: PointerEvent): void {
+    const sent = this.sent;
+    if (this.destroyed || !this.enabled || !sent?.armed) return;
+    const now = performance.now();
+    if (e.pointerType === "pen") this.lastPenAt = now;
+    const surface = this.activeView()?.surface;
+    if (!surface) return;
+    // the palm, while the pen writes or hovers
+    if (surface.input.busy || (e.pointerType === "touch" && now - this.lastPenAt < PALM_MS)) return;
+    const target = e.target instanceof Element ? e.target : null;
+    // on the page itself: writing, a swipe, a pinch – not a press elsewhere
+    if (target && surface.el.contains(target) && !target.closest(UI_SELECTOR)) return;
+    this.uiCount++;
+    const t = Date.now();
+    this.transmit({ ...sent, seq: ++this.seq, at: t, until: t + this.leaseMs(), clear: this.clearCount, ui: this.uiCount, down: undefined });
   }
 
   /** Follow the active ink page's own changes (its pen cards and panels open and close inside it). */
@@ -337,17 +388,19 @@ export class FastInkBridge {
     const surface = view?.surface;
     // while the pen writes, nothing about the page changes: only renew the lease
     if (surface?.input.busy && this.sent) {
-      if (force) this.transmit({ ...this.sent, seq: ++this.seq, until: now + this.leaseMs(), clear: this.clearCount, down: undefined });
+      if (force) this.transmit({ ...this.sent, seq: ++this.seq, at: now, until: now + this.leaseMs(), clear: this.clearCount, down: undefined });
       return;
     }
     const s = this.plugin.settings;
     const inputs = surface ? measureInkPage(surface, { refreshMs: s.fastInkRefreshMs, sideButtonErases: s.sideButton !== "none" }) : NO_INPUTS;
     this.notePage(inputs);
-    const msg = buildMessage(inputs, { seq: this.seq + 1, now, leaseMs: this.leaseMs(), clear: this.clearCount, down: this.down });
+    const msg = buildMessage(inputs, { seq: this.seq + 1, now, leaseMs: this.leaseMs(), clear: this.clearCount, ui: this.uiCount, down: this.down });
     const unchanged = sameRequest(this.sent, msg);
     if (!force && unchanged && !msg.down) return;
-    // nothing to say: it was off and stays off
-    if (!msg.armed && this.sent && !this.sent.armed && unchanged) return;
+    // nothing to say: it was off and stays off (while an ink page is open the lease is renewed anyway,
+    // so the Bridge keeps checking often and the pen tool turns instant ink on at once)
+    const pageShown = !!surface && document.visibilityState === "visible";
+    if (!msg.armed && this.sent && !this.sent.armed && unchanged && !(force && pageShown)) return;
     if (!msg.armed && !this.sent) return;
     if (!this.bridgeSeen()) return;
     this.seq = msg.seq;
@@ -417,8 +470,9 @@ export class FastInkBridge {
     }
     const now = Date.now();
     const renew = this.socketOpen ? RENEW_SOCKET_MS : RENEW_FILE_MS;
-    this.send(!!this.sent?.armed && now - this.sentAt >= renew);
     const pageOpen = !!this.activeView();
+    const pageShown = pageOpen && document.visibilityState === "visible";
+    this.send(!!this.sent && (this.sent.armed || pageShown) && now - this.sentAt >= renew);
     // the socket is tried even before the Bridge's status file shows up: the Bridge may not find
     // the vault (Obsidian's app storage), and the socket needs no file access
     if (!this.socketOpen && pageOpen) {

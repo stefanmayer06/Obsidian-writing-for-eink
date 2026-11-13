@@ -30,6 +30,8 @@ class ContractTest {
         assertEquals(listOf(CssRect(400f, 70f, 201f, 300f), CssRect(600f, 800f, 20f, 56f)), s.exclude)
         assertEquals(PenSpec(BridgeState.STYLE_FOUNTAIN, 5.4f, 0xFFD32F2F.toInt()), s.pen)
         assertEquals(PenDown(100.5f, 200.3f, 4000), s.down)
+        assertEquals(1000L, s.at)
+        assertEquals(2L, s.ui)
         // in device pixels below a 40 px status bar
         val c = Calibration(0f, 40f)
         assertArrayEquals(intArrayOf(0, 154, 1240, 1752), c.toPx(s.region!!, s.dpr, grow = false))

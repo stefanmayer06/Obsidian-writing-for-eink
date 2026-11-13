@@ -115,6 +115,9 @@ export interface SurfaceHost {
   penDown?(clientX: number, clientY: number): void;
   /** The last pen stroke was not ink after all (a link tap, a snapped shape, scribble erasing). */
   inkDiscarded?(): void;
-  /** Part of the page was drawn again (erasing, undo, a page turn, zoom) – not a pen stroke being written. */
-  pageRedrawn?(): void;
+  /**
+   * The page was drawn again – not a pen stroke being written: all of it (`whole`: a page turn, undo,
+   * zoom) or a part (erasing, a snapped shape).
+   */
+  pageRedrawn?(whole: boolean): void;
 }
