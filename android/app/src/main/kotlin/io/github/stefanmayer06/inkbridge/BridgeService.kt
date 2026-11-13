@@ -60,6 +60,10 @@ class BridgeService : Service() {
     @Volatile private var enabled = false
     /** When the firmware may draw, moment by moment (the pen over the page, nothing else changing). */
     private val gate = InkGate()
+    /** Whether the firmware drew the strokes the plugin records. */
+    private val strokes = StrokeCheck()
+    /** When the firmware's drawing went on and off (wall clock ms, on), to tell whether it was drawing at a pen-down. */
+    private val renderLog = ArrayDeque<kotlin.Pair<Long, Boolean>>()
     /** What the firmware was last asked (area, pen). */
     private var applied: FirmwareRequest? = null
     private var state: BridgeState? = null
@@ -98,6 +102,8 @@ class BridgeService : Service() {
     var lastMessageAt = 0L
         private set
     val isArmed: Boolean get() = enabled
+    val missedStrokes: Int get() = strokes.missed
+    val lastMissed: PenDown? get() = strokes.lastMissed
     /** Instant ink in words, for the app's screen. */
     val inkState: String get() = when {
         !enabled -> "off"
@@ -256,8 +262,12 @@ class BridgeService : Service() {
         // keeps only the latest state, so the press and the new tool can arrive as one)
         if (prev != null && s.ui != prev.ui && !screenChanged) gate.pressedElsewhere(s.at, lastMessageAt)
         if (screenChanged) gate.changed()
-        s.down?.let {
-            if (calibration.match(it, s.dpr)) {
+        for (d in s.allDowns) {
+            // each pen-down once (later messages repeat the last few)
+            if (!strokes.pluginDown(d)) continue
+            // only a stroke while the firmware was drawing must have a pen-down of the firmware's
+            if (!wasDrawingAt(d.t)) strokes.forget(d)
+            if (calibration.match(d, s.dpr)) {
                 saveCalibration()
                 applied = null
             }
@@ -266,7 +276,47 @@ class BridgeService : Service() {
         lastClear = s.clear
         if (prevClear != null && prevClear != s.clear) gate.cleared()
         applyNow()
+        checkStrokes()
         report()
+    }
+
+    /** The firmware was drawing at wall clock time [t] (armed, and not paused by the gate). */
+    private fun wasDrawingAt(t: Long): Boolean = renderLog.lastOrNull { it.first <= t }?.second ?: false
+
+    private val strokeCheck = Runnable { checkStrokes() }
+
+    /**
+     * Strokes the plugin recorded but the firmware did not draw: the firmware pauses at once, so the
+     * panel shows Obsidian's own drawing of them (in the firmware's drawing mode it would not). If
+     * the placement says the firmware draws there, the placement is wrong: a measured scale goes.
+     */
+    private fun checkStrokes() {
+        main.removeCallbacks(strokeCheck)
+        val now = System.currentTimeMillis()
+        val misses = strokes.check(now)
+        if (misses.isNotEmpty()) {
+            if (enabled) {
+                gate.missed()
+                helper?.let { syncInk(it) }
+            }
+            val s = state
+            val r = applied
+            if (s != null && r != null && misses.any { placedInside(it, s.dpr, r) } && calibration.distrustScale(s.dpr)) {
+                saveCalibration()
+                applied = null
+                applyNow()
+            }
+            report(force = true)
+        }
+        strokes.nextCheckAt()?.let { main.postDelayed(strokeCheck, maxOf(10L, it - now)) }
+    }
+
+    /** By the current placement, the pen-down is well inside the firmware's drawing area. */
+    private fun placedInside(d: PenDown, dpr: Float, r: FirmwareRequest): Boolean {
+        val (x, y) = calibration.pointToPx(d.x, d.y, dpr)
+        val m = INSIDE_MARGIN_PX
+        val l = r.limit
+        return x >= l.l + m && x < l.r - m && y >= l.t + m && y < l.b - m && r.exclude.none { it.contains(x, y, m) }
     }
 
     private fun onSocketClients(n: Int) {
@@ -466,6 +516,10 @@ class BridgeService : Service() {
      */
     private fun syncInk(h: TouchHelper, penChanged: Boolean = false) {
         val want = enabled && gate.draws
+        if (renderLog.lastOrNull()?.second != want) {
+            renderLog.addLast(kotlin.Pair(System.currentTimeMillis(), want))
+            while (renderLog.size > 64) renderLog.removeFirst()
+        }
         try {
             if (want && !h.isRawDrawingRenderEnabled) {
                 h.setRawDrawingRenderEnabled(true)
@@ -549,7 +603,16 @@ class BridgeService : Service() {
             val y = p?.y
             onMain {
                 gate.penDown()
-                if (x != null && y != null) calibration.recordRaw(x, y, t)
+                strokes.firmwareDown(t)
+                if (x != null && y != null) {
+                    calibration.recordRaw(x, y, t)
+                    // a pen-down the firmware reports over a card or away from the page: it does not draw there
+                    val r = applied
+                    if (enabled && r != null && testHelper == null && zoneOf(x, y, r) == InkGate.Zone.AWAY) {
+                        gate.missed()
+                        helper?.let { syncInk(it) }
+                    }
+                }
             }
         }
 
@@ -596,9 +659,12 @@ class BridgeService : Service() {
 
     private fun report(force: Boolean = false) {
         val c = calibration
-        val json = BridgeState.status(enabled, c.calibrated, c.offsetX, c.offsetY, transport, error, state?.seq ?: 0, penHovers, penStrokes, gate.reason)
+        val json = BridgeState.status(
+            enabled, c.calibrated, c.offsetX, c.offsetY, transport, error, state?.seq ?: 0, penHovers, penStrokes,
+            paused = gate.reason, missed = strokes.missed, lastMissed = strokes.lastMissed, area = drawingArea,
+        )
         socket?.send(json)
-        val key = "$enabled|${c.calibrated}|$transport|$error|$penStrokes"
+        val key = "$enabled|${c.calibrated}|$transport|$error|$penStrokes|${strokes.missed}"
         val now = System.currentTimeMillis()
         if (force || key != lastStatusKey || now - lastStatusWrite > STATUS_EVERY_MS) {
             file?.writeStatus(json)
@@ -648,6 +714,8 @@ class BridgeService : Service() {
         private const val LEASE_CHECK_MS = 500L
         /** Without hover reports, the firmware draws again this long after it paused. */
         private const val NO_HOVER_RELEASE_MS = 300L
+        /** A missed stroke this far inside the drawing area (px) means the placement is wrong. */
+        private const val INSIDE_MARGIN_PX = 40
         private const val STATUS_EVERY_MS = 5_000L
         const val TEST_MS = 30_000L
         const val EXTRA_FEATURE = "feature"

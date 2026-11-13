@@ -117,8 +117,8 @@ function startBridge() {
     async function pen(points, opts = {}) {
       const base = { pointerType: "pen", button: opts.side ? "right" : "left", buttons: opts.side ? 2 : 1, tiltX: 0, tiltY: 0 };
       const s0 = points[0];
-      // the firmware's pen reader sees the pen-down first, in screen pixels
-      await page.evaluate(([x, y]) => window.rawPen(x, y), [s0.x * DPR, s0.y * DPR + SCREEN_Y]);
+      // the firmware's pen reader sees the pen-down first, in screen pixels (unless it does not draw there)
+      if (!opts.firmwareMisses) await page.evaluate(([x, y]) => window.rawPen(x, y), [s0.x * DPR, s0.y * DPR + SCREEN_Y]);
       await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: s0.x, y: s0.y, pointerType: "pen", buttons: 0, force: 0 });
       await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: s0.x, y: s0.y, clickCount: 1, force: 0.5, ...base });
       for (const s of points.slice(1)) await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: s.x, y: s.y, force: 0.5, ...base });
@@ -257,6 +257,14 @@ function startBridge() {
     await pen(wave(150, 700));
     await page.waitForTimeout(300);
     check("writing on the page does not count as a press elsewhere", ((await last())?.ui ?? 0) === uiWriting, `${uiWriting} → ${(await last())?.ui}`);
+    check("…and the firmware drew it (no stroke missed)", ((await last())?.missed ?? -1) === 0, JSON.stringify((await last())?.missed));
+
+    // a stroke where the firmware does not draw: the Bridge finds out at once (and pauses the firmware,
+    // so the screen shows Ink Notebook's own drawing of it instead of nothing until the next tool change)
+    const tMiss = Date.now();
+    await pen(wave(400, 200), { firmwareMisses: true });
+    f = await waitFw((m) => m.missed > 0, 2000);
+    check("a stroke the firmware did not draw is found within a moment", f?.missed === 1 && Date.now() - tMiss < 1500, `${f?.missed} after ${Date.now() - tMiss} ms`);
 
     const before = (await last())?.clears ?? 0;
     await pen(

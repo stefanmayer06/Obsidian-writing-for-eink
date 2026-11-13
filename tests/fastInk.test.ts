@@ -69,6 +69,20 @@ describe("instant ink messages", () => {
     expect(sameRequest(a, buildMessage(inputs, { seq: 2, now: 0, leaseMs: 1000, clear: 0, ui: 1 }))).toBe(false);
   });
 
+  it("carries the recent pen-downs, which are not news by themselves", () => {
+    const a = buildMessage(inputs, { seq: 1, now: 0, leaseMs: 1000, clear: 0 });
+    const b = buildMessage(inputs, { seq: 2, now: 10, leaseMs: 1000, clear: 0, downs: [{ x: 1.04, y: 2, t: 5.2 }] });
+    expect(b.downs).toEqual([{ x: 1, y: 2, t: 5 }]);
+    expect(a.downs).toBeUndefined();
+    expect(sameRequest(a, b)).toBe(true);
+  });
+
+  it("reads the strokes the firmware missed", () => {
+    const s = parseStatus('{"v":1,"type":"status","at":5,"armed":true,"calibrated":true,"missed":2,"lastMissed":{"x":600,"y":120},"area":"x 0–1240"}');
+    expect(s).toMatchObject({ missed: 2, lastMissed: { x: 600, y: 120 }, area: "x 0–1240" });
+    expect(parseStatus('{"v":1,"type":"status","at":5,"lastMissed":{"x":"a"}}')?.lastMissed).toBeUndefined();
+  });
+
   it("says when it was sent", () => {
     expect(buildMessage(inputs, { seq: 1, now: 1234.6, leaseMs: 1000, clear: 0 })).toMatchObject({ at: 1235, until: 2234.6, ui: 0 });
   });

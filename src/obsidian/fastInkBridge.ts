@@ -63,8 +63,9 @@ const REFRESH_SETTLE_MS = 250;
 const REFRESH_PAGE_MS = 30;
 /** Touches this soon after the pen moved are the palm resting on the screen, not presses. */
 const PALM_MS = 700;
-/** Pen-downs sent at once (not with the next renewal), so the Bridge can measure the page's scale. */
-const PROMPT_DOWNS = 8;
+/** Pen-downs this recent go with every message (the control file keeps only the latest message). */
+const RECENT_DOWNS_MS = 1500;
+const RECENT_DOWNS = 4;
 
 const NO_INPUTS: FastInkInputs = { ready: false, region: null, exclude: [], pen: null, dpr: 1, refreshMs: 800, sideButtonErases: true };
 
@@ -103,7 +104,9 @@ export function measureInkPage(surface: InkSurface, opts: { refreshMs: number; s
   const region = box.width > 0 && box.height > 0 ? rectOf(box) : null;
   const exclude: CssRect[] = [];
   doc.querySelectorAll<HTMLElement>(UI_SELECTOR).forEach((el) => {
-    if (win.getComputedStyle(el).visibility === "hidden") return;
+    // only what is really there: a card or tooltip fading out, or kept invisible, takes no ink away
+    const style = win.getComputedStyle(el);
+    if (style.visibility === "hidden" || Number(style.opacity) === 0) return;
     for (const r of Array.from(el.getClientRects())) if (r.width > 0 && r.height > 0) exclude.push(rectOf(r));
   });
   const t = surface.tools;
@@ -161,7 +164,8 @@ export class FastInkBridge {
   private clearCount = 0;
   private sent: FastInkMessage | null = null;
   private sentAt = 0;
-  private down: { x: number; y: number; t: number } | null = null;
+  /** The last few pen-downs (CSS pixels, wall clock ms), see FastInkMessage.downs. */
+  private downs: Array<{ x: number; y: number; t: number }> = [];
   private frame = 0;
   private interval: number | null = null;
   private writing = false;
@@ -176,8 +180,6 @@ export class FastInkBridge {
   private observedEl: HTMLElement | null = null;
   private refreshTimer: number | null = null;
   private refreshAt = 0;
-  /** Pen-downs sent to the Bridge (the first few go at once, for measuring the page). */
-  private downsSent = 0;
   /** Presses on anything but the page (the Bridge pauses the firmware for each, see FastInkMessage.ui). */
   private uiCount = 0;
   /** When the pen last moved over Obsidian, writing or hovering (performance.now()). */
@@ -287,14 +289,28 @@ export class FastInkBridge {
     });
   }
 
-  /** The pen touched the page; the Bridge uses this to measure where the window is. */
+  /**
+   * The pen touched the page: the Bridge hears of it at once. It checks that the firmware is
+   * drawing this stroke (if not, the firmware pauses, so the screen shows Ink Notebook's own
+   * drawing of it), and measures where the page is on screen from it.
+   */
   penDown(x: number, y: number): void {
-    if (!this.enabled || !this.sent?.armed) return;
+    const sent = this.sent;
+    if (!this.enabled || !sent?.armed || this.destroyed) return;
     if (this.onPage?.armed) this.onPage.strokes++;
-    this.down = { x, y, t: Date.now() };
-    // the Bridge measures where the page is, and at what scale, from pen-downs spread over it:
-    // the first few go at once, later ones with the next renewal
-    if (!this.bridgeStatus?.calibrated || this.downsSent < PROMPT_DOWNS) this.update();
+    const t = Date.now();
+    const d = { x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, t };
+    this.downs = [...this.recentDowns(t), d].slice(-RECENT_DOWNS);
+    this.transmit({ ...sent, seq: ++this.seq, at: t, until: t + this.leaseMs(), clear: this.clearCount, ui: this.uiCount, down: d, downs: this.downs });
+  }
+
+  /**
+   * The pen-downs of the last moments: every message carries them, since a message written to the
+   * control file right after another replaces it before the Bridge reads it.
+   */
+  private recentDowns(now = Date.now()): Array<{ x: number; y: number; t: number }> {
+    this.downs = this.downs.filter((o) => now - o.t < RECENT_DOWNS_MS);
+    return this.downs;
   }
 
   /** The last stroke was not ink: the Bridge takes its fast ink off the page. */
@@ -348,7 +364,7 @@ export class FastInkBridge {
     if (target && surface.el.contains(target) && !target.closest(UI_SELECTOR)) return;
     this.uiCount++;
     const t = Date.now();
-    this.transmit({ ...sent, seq: ++this.seq, at: t, until: t + this.leaseMs(), clear: this.clearCount, ui: this.uiCount, down: undefined });
+    this.transmit({ ...sent, seq: ++this.seq, at: t, until: t + this.leaseMs(), clear: this.clearCount, ui: this.uiCount, down: undefined, downs: this.recentDowns(t) });
   }
 
   /** Follow the active ink page's own changes (its pen cards and panels open and close inside it). */
@@ -388,15 +404,15 @@ export class FastInkBridge {
     const surface = view?.surface;
     // while the pen writes, nothing about the page changes: only renew the lease
     if (surface?.input.busy && this.sent) {
-      if (force) this.transmit({ ...this.sent, seq: ++this.seq, at: now, until: now + this.leaseMs(), clear: this.clearCount, down: undefined });
+      if (force) this.transmit({ ...this.sent, seq: ++this.seq, at: now, until: now + this.leaseMs(), clear: this.clearCount, down: undefined, downs: this.recentDowns(now) });
       return;
     }
     const s = this.plugin.settings;
     const inputs = surface ? measureInkPage(surface, { refreshMs: s.fastInkRefreshMs, sideButtonErases: s.sideButton !== "none" }) : NO_INPUTS;
     this.notePage(inputs);
-    const msg = buildMessage(inputs, { seq: this.seq + 1, now, leaseMs: this.leaseMs(), clear: this.clearCount, ui: this.uiCount, down: this.down });
+    const msg = buildMessage(inputs, { seq: this.seq + 1, now, leaseMs: this.leaseMs(), clear: this.clearCount, ui: this.uiCount, downs: this.recentDowns(now) });
     const unchanged = sameRequest(this.sent, msg);
-    if (!force && unchanged && !msg.down) return;
+    if (!force && unchanged) return;
     // nothing to say: it was off and stays off (while an ink page is open the lease is renewed anyway,
     // so the Bridge keeps checking often and the pen tool turns instant ink on at once)
     const pageShown = !!surface && document.visibilityState === "visible";
@@ -404,8 +420,6 @@ export class FastInkBridge {
     if (!msg.armed && !this.sent) return;
     if (!this.bridgeSeen()) return;
     this.seq = msg.seq;
-    if (msg.down) this.downsSent++;
-    this.down = null;
     this.transmit(msg);
   }
 

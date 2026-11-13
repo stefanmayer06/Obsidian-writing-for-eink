@@ -71,12 +71,14 @@ class Calibration(private var guessX: Float = 0f, private var guessY: Float = 0f
 
     /**
      * The plugin reported a pen-down. Returns true when the placement changed (the
-     * rectangles have to be sent to the firmware again).
+     * rectangles have to be sent to the firmware again). Only a press the firmware
+     * reported once at that moment counts: with two, which is which is a guess.
      */
     fun match(down: PenDown, dpr: Float): Boolean {
         if (down.t == lastMatched) return false
-        val best = raw.minByOrNull { abs(it.t - down.t) } ?: return false
-        if (abs(best.t - down.t) > MAX_SKEW_MS) return false
+        val near = raw.filter { abs(it.t - down.t) <= MAX_SKEW_MS }
+        if (near.size != 1) return false
+        val best = near[0]
         lastMatched = down.t
         val p = Press(down.x, down.y, best.x, best.y)
         // not the same press (or a wildly wrong one): with the current placement it would be far off
@@ -103,6 +105,25 @@ class Calibration(private var guessX: Float = 0f, private var guessY: Float = 0f
         return changed
     }
 
+    /**
+     * A stroke where the firmware should have drawn was not drawn: a measured scale is not trusted
+     * any more (the device pixel ratio is used, and the offset is measured again from the presses).
+     * True when that changed the placement.
+     */
+    fun distrustScale(dpr: Float): Boolean {
+        if (scaleX == null && scaleY == null) return false
+        scaleX = null
+        scaleY = null
+        if (pairs.isNotEmpty()) {
+            offsetX = median(pairs.map { it.rx - it.cx * dpr })
+            offsetY = median(pairs.map { it.ry - it.cy * dpr })
+        }
+        return true
+    }
+
+    /** A CSS point in overlay pixels. */
+    fun pointToPx(x: Float, y: Float, dpr: Float): kotlin.Pair<Float, Float> = kotlin.Pair(x * (scaleX ?: dpr) + offsetX, y * (scaleY ?: dpr) + offsetY)
+
     /** CSS pixels in overlay pixels as [left, top, right, bottom]; `grow` rounds outwards and adds a margin. */
     fun toPx(r: CssRect, dpr: Float, grow: Boolean): IntArray {
         val sx = scaleX ?: dpr
@@ -121,16 +142,16 @@ class Calibration(private var guessX: Float = 0f, private var guessY: Float = 0f
     companion object {
         private const val MAX_RAW = 64
         private const val MAX_PAIRS = 12
-        private const val MAX_SKEW_MS = 400L
+        private const val MAX_SKEW_MS = 200L
         /** The first press may be this far from the guess (split screen moves the window a lot). */
         private const val MAX_OFFSET = 1400f
         /** Later presses this far from the fit are another press, not a new measurement. */
         private const val MAX_JUMP = 60f
         private const val MIN_CHANGE = 1.5f
-        /** CSS pixels the presses must be spread over before the scale is measured. */
-        private const val MIN_SPREAD = 150f
+        /** CSS pixels the presses must be spread over before the scale is measured (a scale from a small cluster is a guess far from it). */
+        private const val MIN_SPREAD = 300f
         /** The fitted scale must be this close to the device pixel ratio (factor) and fit the presses this well (px). */
-        private const val SCALE_RANGE = 2f
+        private const val SCALE_RANGE = 1.25f
         private const val MAX_RESIDUAL = 12f
 
         /** Device pixels added around parts left out of the drawing area. */
