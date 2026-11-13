@@ -53,7 +53,7 @@ describe("instant ink messages", () => {
   });
 
   it("builds the message the Bridge app reads (shared with its tests)", () => {
-    const msg = buildMessage(inputs, { seq: 42, now: 1000, leaseMs: 4000, clear: 3, down: { x: 100.54, y: 200.25, t: 4000 } });
+    const msg = buildMessage(inputs, { seq: 42, now: 1000, leaseMs: 4000, clear: 3, ui: 2, down: { x: 100.54, y: 200.25, t: 4000 } });
     const fixture = JSON.parse(readFileSync("android/app/src/test/resources/plugin-message.json", "utf8"));
     expect(msg).toEqual(fixture);
   });
@@ -65,6 +65,12 @@ describe("instant ink messages", () => {
     expect(sameRequest(a, buildMessage(inputs, { seq: 2, now: 0, leaseMs: 1000, clear: 1 }))).toBe(false);
     expect(sameRequest(a, buildMessage({ ...inputs, ready: false }, { seq: 2, now: 0, leaseMs: 1000, clear: 0 }))).toBe(false);
     expect(sameRequest(null, a)).toBe(false);
+    // a press on a toolbar is news for the Bridge (it pauses the firmware)
+    expect(sameRequest(a, buildMessage(inputs, { seq: 2, now: 0, leaseMs: 1000, clear: 0, ui: 1 }))).toBe(false);
+  });
+
+  it("says when it was sent", () => {
+    expect(buildMessage(inputs, { seq: 1, now: 1234.6, leaseMs: 1000, clear: 0 })).toMatchObject({ at: 1235, until: 2234.6, ui: 0 });
   });
 
   it("reads the Bridge's status", () => {

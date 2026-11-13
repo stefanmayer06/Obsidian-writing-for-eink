@@ -4,6 +4,18 @@ package io.github.stefanmayer06.inkbridge
 data class PxRect(val l: Int, val t: Int, val r: Int, val b: Int) {
     val isEmpty: Boolean get() = r <= l || b <= t
     fun intersects(o: PxRect) = l < o.r && o.l < r && t < o.b && o.t < b
+    fun contains(x: Float, y: Float, margin: Int = 0) = x >= l - margin && x < r + margin && y >= t - margin && y < b + margin
+}
+
+/** Pixels around the page where the pen counts as still over it (writing near the edge). */
+const val EDGE_PX = 24
+
+/** What the pen hovers over, for [InkGate]: the page, its edge, or something else (a toolbar, a card, Obsidian). */
+fun zoneOf(x: Float, y: Float, r: FirmwareRequest): InkGate.Zone = when {
+    r.exclude.any { it.contains(x, y) } -> InkGate.Zone.AWAY
+    r.limit.contains(x, y) -> InkGate.Zone.PAGE
+    r.limit.contains(x, y, EDGE_PX) -> InkGate.Zone.EDGE
+    else -> InkGate.Zone.AWAY
 }
 
 /** What the firmware is asked to do: draw inside [limit] but not in [exclude], with [pen]. */

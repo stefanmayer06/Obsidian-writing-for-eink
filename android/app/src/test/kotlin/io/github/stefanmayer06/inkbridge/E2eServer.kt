@@ -40,6 +40,7 @@ object E2eServer {
                 .put("calibrated", cal.calibrated)
                 .put("offset", JSONArray(listOf(cal.offsetX.toDouble(), cal.offsetY.toDouble())))
                 .put("clears", clears)
+                .put("ui", state?.ui ?: 0)
             if (req != null) {
                 o.put("limit", arr(req.limit))
                 o.put("exclude", JSONArray(req.exclude.map { arr(it) }))

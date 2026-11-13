@@ -33,6 +33,8 @@
   "refreshMs": 800,
   "sideButtonErases": true,
   "clear": 3,
+  "at": 1000,
+  "ui": 2,
   "down": {
     "x": 100.5,
     "y": 200.3,

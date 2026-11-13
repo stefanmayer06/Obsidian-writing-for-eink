@@ -92,6 +92,7 @@ export class InkSettingTab extends PluginSettingTab {
         let text = `Connected to the Bridge app${s?.app ? ` ${s.app}` : ""} (${via}).`;
         if (s && !s.calibrated) text += " The position on screen is measured from your first strokes.";
         if (s?.penStrokes !== undefined) text += ` The firmware's pen reader has reported ${s.penHovers ?? 0} hover(s) and ${s.penStrokes} stroke(s) to the Bridge.`;
+        if (s?.armed && s.paused) text += ` Instant ink pauses while the pen is away from the page (now: ${s.paused}).`;
         if (s?.error) text += ` Problem: ${s.error}`;
         return text;
       }
@@ -167,11 +168,6 @@ export class InkSettingTab extends PluginSettingTab {
             desc: "With the Ink Notebook Bridge app, the Boox firmware draws your writing straight onto the screen – with no lag, like in the Boox Notes app – while Ink Notebook records the strokes as always. Automatic: on Boox tablets, once the Bridge app is running.",
             aliases: ["Boox", "latency", "lag", "Bridge"],
             control: { type: "dropdown", key: "fastInk", options: { auto: "Automatic", on: "Always on", off: "Off" }, after: () => this.refresh() },
-          },
-          {
-            name: "Page's own ink after",
-            desc: "Milliseconds after you lift the pen before the instant ink gives way to the page's own drawing of the strokes. Longer means fewer screen refreshes while you write.",
-            control: { type: "slider", key: "fastInkRefreshMs", min: 200, max: 3000, step: 100, after: () => this.plugin.fastInk.update() },
           },
           {
             name: "Ink Notebook Bridge app",

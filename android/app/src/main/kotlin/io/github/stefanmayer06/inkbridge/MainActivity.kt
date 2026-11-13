@@ -266,7 +266,7 @@ class MainActivity : Activity() {
                 append(
                     when {
                         svc.isTesting -> "TEST ${svc.testName} running – write anywhere."
-                        svc.isArmed -> "Instant ink: on (pen over the ink page)."
+                        svc.isArmed -> "Instant ink: on – ${svc.inkState}."
                         else -> "Instant ink: waiting (no ink page with the pen tool open)."
                     },
                 )
