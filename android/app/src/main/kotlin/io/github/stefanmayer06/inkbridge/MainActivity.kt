@@ -272,6 +272,12 @@ class MainActivity : Activity() {
                 )
                 append("\n")
                 append("Firmware pen reader: ${svc.penHovers} hover(s), ${svc.penStrokes} stroke(s) seen.")
+                if (svc.missedStrokes > 0) {
+                    val m = svc.lastMissed
+                    append("\nStrokes the firmware did not draw: ${svc.missedStrokes}")
+                    if (m != null) append(" (the last at x %.0f, y %.0f in Obsidian)".format(m.x, m.y))
+                    append(". Ink Notebook's own drawing showed them instead.")
+                }
                 if (svc.touchEvents > 0) append(" Pen events to the Bridge: ${svc.touchEvents}.")
                 append("\n")
                 append(if (svc.isCalibrated) "Position: measured." else "Position: estimated. It is measured from your first strokes.")

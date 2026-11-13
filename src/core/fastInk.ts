@@ -46,6 +46,11 @@ export interface FastInkMessage {
   clear: number;
   /** The last pen-down (CSS pixels, wall clock ms): the Bridge measures where the window is with it. */
   down?: { x: number; y: number; t: number };
+  /**
+   * The pen-downs of the last moments (each is sent the moment it happens). The Bridge checks that
+   * the firmware drew each of these strokes, and pauses the firmware if not.
+   */
+  downs?: Array<{ x: number; y: number; t: number }>;
   /** Wall clock ms when this was sent (the Bridge waits for a state sent after the pen visited a toolbar). */
   at: number;
   /**
@@ -70,6 +75,11 @@ export interface FastInkStatus {
   penStrokes?: number;
   /** Why the firmware is paused although instant ink is on (the pen is over a toolbar, …). */
   paused?: string;
+  /** Strokes the firmware did not draw (Ink Notebook's own drawing showed them), and where the last was (CSS pixels). */
+  missed?: number;
+  lastMissed?: { x: number; y: number };
+  /** The firmware's drawing area, in the Bridge's words. */
+  area?: string;
 }
 
 /** What the page looks like right now, measured by the view. */
@@ -158,7 +168,15 @@ export function isArmed(inputs: FastInkInputs): boolean {
 /** The message for the Bridge. */
 export function buildMessage(
   inputs: FastInkInputs,
-  opts: { seq: number; now: number; leaseMs: number; clear: number; ui?: number; down?: { x: number; y: number; t: number } | null },
+  opts: {
+    seq: number;
+    now: number;
+    leaseMs: number;
+    clear: number;
+    ui?: number;
+    down?: { x: number; y: number; t: number } | null;
+    downs?: ReadonlyArray<{ x: number; y: number; t: number }>;
+  },
 ): FastInkMessage {
   const armed = isArmed(inputs);
   const region = inputs.region ? roundIn(inputs.region) : null;
@@ -179,14 +197,21 @@ export function buildMessage(
     ui: opts.ui ?? 0,
   };
   if (opts.down) msg.down = { x: round1(opts.down.x), y: round1(opts.down.y), t: Math.round(opts.down.t) };
+  if (opts.downs?.length) msg.downs = opts.downs.map((d) => ({ x: round1(d.x), y: round1(d.y), t: Math.round(d.t) }));
   return msg;
 }
 
 /** Two messages ask the Bridge for the same thing (the lease, the time and the pen-down aside). */
 export function sameRequest(a: FastInkMessage | null, b: FastInkMessage | null): boolean {
   if (!a || !b) return a === b;
-  const strip = (m: FastInkMessage) => JSON.stringify({ ...m, seq: 0, until: 0, at: 0, down: undefined });
+  const strip = (m: FastInkMessage) => JSON.stringify({ ...m, seq: 0, until: 0, at: 0, down: undefined, downs: undefined });
   return strip(a) === strip(b);
+}
+
+function point(v: unknown): { x: number; y: number } | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const p = v as Record<string, unknown>;
+  return typeof p.x === "number" && typeof p.y === "number" ? { x: p.x, y: p.y } : undefined;
 }
 
 /** A status message from the Bridge, or null. */
@@ -208,6 +233,9 @@ export function parseStatus(text: string): FastInkStatus | null {
       penHovers: typeof r.penHovers === "number" ? r.penHovers : undefined,
       penStrokes: typeof r.penStrokes === "number" ? r.penStrokes : undefined,
       paused: typeof r.paused === "string" ? r.paused : undefined,
+      missed: typeof r.missed === "number" ? r.missed : undefined,
+      lastMissed: point(r.lastMissed),
+      area: typeof r.area === "string" ? r.area : undefined,
     };
   } catch {
     return null;

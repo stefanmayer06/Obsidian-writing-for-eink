@@ -81,6 +81,12 @@ class InkGate(
     fun cleared() = hold("the page changed")
 
     /**
+     * The pen writes where the firmware does not draw: pause at once, mid-stroke, so the panel shows
+     * Obsidian's own drawing of the stroke (it would stay invisible until the next pause).
+     */
+    fun missed() = hold("the pen wrote where the firmware does not draw")
+
+    /**
      * Something other than the page was pressed (the plugin reports it at once, before it changes
      * anything): stop, and wait for what the press changes.
      */

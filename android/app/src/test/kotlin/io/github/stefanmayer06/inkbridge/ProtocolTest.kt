@@ -48,6 +48,15 @@ class ProtocolTest {
     }
 
     @Test
+    fun readsTheRecentPenDowns() {
+        val s = BridgeState.parse(message.replace("\"clear\":3,", "\"clear\":3,\"downs\":[{\"x\":1,\"y\":2,\"t\":3900},{\"x\":100.5,\"y\":200.25,\"t\":4000},{\"y\":5}],"))!!
+        // the broken one is dropped, the last one is the same as "down"
+        assertEquals(listOf(PenDown(1f, 2f, 3900), PenDown(100.5f, 200.25f, 4000)), s.allDowns)
+        // without the list: the last pen-down alone
+        assertEquals(listOf(PenDown(100.5f, 200.25f, 4000)), BridgeState.parse(message)!!.allDowns)
+    }
+
+    @Test
     fun tellsScreenChangesFromRenewals() {
         val s = BridgeState.parse(message)!!
         assertTrue(s.sameScreen(s.copy(seq = 43, until = 9000, at = 5, ui = 1, clear = 4, down = null)))
@@ -174,6 +183,46 @@ class CalibrationTest {
         }
         assertNull(c.scaleX)
         assertEquals(48f, c.offsetY, 0.01f)
+    }
+
+    @Test
+    fun twoPressesAtOnceAreNotAMeasurement() {
+        val c = Calibration(0f, 40f)
+        c.recordRaw(210f, 464f, 1000)
+        c.recordRaw(900f, 900f, 1100)
+        assertFalse(c.match(PenDown(100f, 200f, 1030), 2f))
+        assertFalse(c.calibrated)
+    }
+
+    @Test
+    fun aScaleFromPressesCloseTogetherIsNotMeasured() {
+        // three presses within 200 CSS px: a scale from them would be a guess far from them
+        val c = Calibration(0f, 40f)
+        for ((i, p) in listOf(300f to 300f, 400f to 380f, 480f to 330f).withIndex()) {
+            val t = 1000L * (i + 1)
+            c.recordRaw(p.first * 1.8f + 5f, p.second * 1.8f + 30f, t)
+            c.match(PenDown(p.first, p.second, t), 2f)
+        }
+        assertNull(c.scaleX)
+        assertNull(c.scaleY)
+    }
+
+    @Test
+    fun aMissedStrokeTakesTheMeasuredScaleAway() {
+        val c = Calibration(0f, 40f)
+        val presses = listOf(100f to 100f, 500f to 300f, 300f to 700f, 600f to 900f)
+        for ((i, p) in presses.withIndex()) {
+            val t = 1000L * (i + 1)
+            c.recordRaw(p.first * 1.8f + 5f, p.second * 1.8f + 30f, t)
+            c.match(PenDown(p.first, p.second, t), 2f)
+        }
+        assertNotNull(c.scaleX)
+        assertTrue(c.distrustScale(2f))
+        assertNull(c.scaleX)
+        assertNull(c.scaleY)
+        // the offset fits the presses at the device pixel ratio (their median)
+        assertEquals(-75f, c.offsetX, 0.5f)
+        assertFalse(c.distrustScale(2f))
     }
 
     @Test

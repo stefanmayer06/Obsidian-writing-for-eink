@@ -93,6 +93,11 @@ export class InkSettingTab extends PluginSettingTab {
         if (s && !s.calibrated) text += " The position on screen is measured from your first strokes.";
         if (s?.penStrokes !== undefined) text += ` The firmware's pen reader has reported ${s.penHovers ?? 0} hover(s) and ${s.penStrokes} stroke(s) to the Bridge.`;
         if (s?.armed && s.paused) text += ` Instant ink pauses while the pen is away from the page (now: ${s.paused}).`;
+        if (s?.missed) {
+          const at = s.lastMissed ? ` – the last at ${Math.round(s.lastMissed.x)}, ${Math.round(s.lastMissed.y)} in the window` : "";
+          text += ` ${s.missed} stroke(s) were outside the firmware's drawing area${at}; Ink Notebook's own drawing showed them instead.`;
+          if (s.area) text += ` Drawing area: ${s.area}.`;
+        }
         if (s?.error) text += ` Problem: ${s.error}`;
         return text;
       }

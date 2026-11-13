@@ -26,6 +26,7 @@ object E2eServer {
         var state: BridgeState? = null
         var lastClear: Long? = null
         var clears = 0
+        val strokes = StrokeCheck()
         val lock = Object()
         lateinit var server: ControlSocket
 
@@ -41,6 +42,7 @@ object E2eServer {
                 .put("offset", JSONArray(listOf(cal.offsetX.toDouble(), cal.offsetY.toDouble())))
                 .put("clears", clears)
                 .put("ui", state?.ui ?: 0)
+                .put("missed", strokes.missed)
             if (req != null) {
                 o.put("limit", arr(req.limit))
                 o.put("exclude", JSONArray(req.exclude.map { arr(it) }))
@@ -59,11 +61,17 @@ object E2eServer {
                     val raw = runCatching { JSONObject(text) }.getOrNull()
                     if (raw?.optString("type") == "raw-test") {
                         cal.recordRaw(raw.getDouble("x").toFloat(), raw.getDouble("y").toFloat(), raw.getLong("t"))
+                        strokes.firmwareDown(raw.getLong("t"))
                     } else {
                         val s = BridgeState.parse(text)
                         if (s != null) {
                             state = s
-                            s.down?.let { cal.match(it, s.dpr) }
+                            val drawing = firmwareRequest(s, cal, w, h, System.currentTimeMillis()) != null
+                            for (d in s.allDowns) {
+                                if (!strokes.pluginDown(d)) continue
+                                if (!drawing) strokes.forget(d)
+                                cal.match(d, s.dpr)
+                            }
                             if (lastClear != null && lastClear != s.clear) clears++
                             lastClear = s.clear
                             report()
@@ -74,6 +82,13 @@ object E2eServer {
             onClientsChanged = {},
         )
         server.start()
+        // strokes the firmware did not report (as the Bridge's main thread checks them)
+        Thread {
+            while (true) {
+                Thread.sleep(50)
+                synchronized(lock) { if (strokes.check(System.currentTimeMillis()).isNotEmpty()) report() }
+            }
+        }.apply { isDaemon = true }.start()
         println("e2e bridge listening on 127.0.0.1:$port")
         System.out.flush()
         Thread.currentThread().join()
