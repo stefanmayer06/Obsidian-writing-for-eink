@@ -114,6 +114,40 @@ class CalibrationTest {
     }
 
     @Test
+    fun measuresTheScaleFromPressesSpreadOverThePage() {
+        // the page's real scale is 1.8 (not the ratio 2 the plugin reports, e.g. Boox's per-app DPI)
+        val c = Calibration(0f, 40f)
+        val presses = listOf(100f to 100f, 500f to 300f, 300f to 700f, 600f to 900f)
+        for ((i, p) in presses.withIndex()) {
+            val t = 1000L * (i + 1)
+            c.recordRaw(p.first * 1.8f + 5f, p.second * 1.8f + 30f, t)
+            c.match(PenDown(p.first, p.second, t + 5), 2f)
+        }
+        assertEquals(1.8f, c.scaleX!!, 0.001f)
+        assertEquals(1.8f, c.scaleY!!, 0.001f)
+        assertEquals(5f, c.offsetX, 0.1f)
+        assertEquals(30f, c.offsetY, 0.1f)
+        // the whole page, not just part of it
+        assertArrayEquals(intArrayOf(5, 30, 1121, 1470), c.toPx(CssRect(0f, 0f, 620f, 800f), 2f, grow = false))
+        // a press that does not fit (another pen-down at nearly the same time) changes nothing
+        c.recordRaw(50f, 50f, 9000)
+        assertFalse(c.match(PenDown(600f, 600f, 9001), 2f))
+        assertEquals(1.8f, c.scaleX!!, 0.001f)
+    }
+
+    @Test
+    fun keepsTheRatioWhenItFits() {
+        val c = Calibration(0f, 40f)
+        for ((i, p) in listOf(100f to 100f, 500f to 300f, 300f to 700f).withIndex()) {
+            val t = 1000L * (i + 1)
+            c.recordRaw(p.first * 2f, p.second * 2f + 48f, t)
+            c.match(PenDown(p.first, p.second, t), 2f)
+        }
+        assertNull(c.scaleX)
+        assertEquals(48f, c.offsetY, 0.01f)
+    }
+
+    @Test
     fun oneOddPressDoesNotMoveThePage() {
         val c = Calibration()
         for ((i, dy) in listOf(64f, 64f, 64f, 90f, 64f).withIndex()) {

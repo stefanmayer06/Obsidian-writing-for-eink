@@ -71,6 +71,11 @@ class MainActivity : Activity() {
         col.addView(button("Add a vault folder…") { pickVault() })
         startStop = button("Start") { toggle() }
         col.addView(startStop)
+        col.addView(
+            button("Measure the page position again") {
+                startService(Intent(this, BridgeService::class.java).setAction(BridgeService.ACTION_RECALIBRATE))
+            },
+        )
         col.addView(text("Tests", 20f, bold = true))
         col.addView(
             text(
@@ -270,6 +275,8 @@ class MainActivity : Activity() {
                 if (svc.touchEvents > 0) append(" Pen events to the Bridge: ${svc.touchEvents}.")
                 append("\n")
                 append(if (svc.isCalibrated) "Position: measured." else "Position: estimated. It is measured from your first strokes.")
+                append("\n")
+                append("Drawing area: ${svc.drawingArea}")
                 svc.lastError?.let { append("\nProblem: $it") }
             }
         }

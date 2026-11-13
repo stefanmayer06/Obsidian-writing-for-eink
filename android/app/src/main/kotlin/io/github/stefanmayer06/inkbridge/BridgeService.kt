@@ -133,6 +133,7 @@ class BridgeService : Service() {
             }
             ACTION_RESCAN -> file?.rescanNow()
             ACTION_TEST -> startTest(intent.getIntExtra(EXTRA_FEATURE, TouchHelper.FEATURE_SF_TOUCH_RENDER))
+            ACTION_RECALIBRATE -> recalibrate()
         }
         return START_STICKY
     }
@@ -196,7 +197,9 @@ class BridgeService : Service() {
         closeRaw()
         calibration.reset(0f, guessOffsetY())
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(calibrationKey(), null)
-        saved?.split(",")?.mapNotNull { it.toFloatOrNull() }?.takeIf { it.size == 2 }?.let { calibration.restore(it[0], it[1]) }
+        saved?.split(",")?.map { it.toFloatOrNull() }?.let {
+            if (it.size >= 2 && it[0] != null && it[1] != null) calibration.restore(it[0]!!, it[1]!!, it.getOrNull(2), it.getOrNull(3))
+        }
         openRaw()
         applyNow()
         report()
@@ -209,11 +212,12 @@ class BridgeService : Service() {
         return (statusBarHeight() - loc[1]).toFloat()
     }
 
-    private fun calibrationKey() = "cal_${overlayW}x$overlayH"
+    // v2: offset and scale (the 0.4/0.5 offsets were measured assuming the device pixel ratio)
+    private fun calibrationKey() = "cal2_${overlayW}x$overlayH"
 
     private fun saveCalibration() {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-            .putString(calibrationKey(), "${calibration.offsetX},${calibration.offsetY}")
+            .putString(calibrationKey(), "${calibration.offsetX},${calibration.offsetY},${calibration.scaleX ?: ""},${calibration.scaleY ?: ""}")
             .apply()
     }
 
@@ -441,29 +445,43 @@ class BridgeService : Service() {
 
     /**
      * The plugin changed the page in a way the firmware's ink does not show (the stroke was not ink
-     * after all, something was erased, undone, the page turned): repaint the page from what
-     * Obsidian shows. Only a repaint: switching the firmware layer off and on makes the panel
-     * redraw the whole area with a visible flash.
+     * after all, something was erased, undone, the page turned): the firmware's layer goes off, so
+     * the panel shows Obsidian's page, and comes back when the pen next comes near the screen.
+     * (EpdController.handwritingRepaint, tried in 0.5.0, reaches into the firmware with side
+     * effects: instant ink then worked only in part of the page and page turns lagged.)
      */
     private fun clearInk() {
-        val v = overlay ?: return
-        val a = applied ?: return
+        val h = helper ?: return
+        if (!enabled) return
         try {
-            EpdController.handwritingRepaint(v, a.limit.toRect())
+            h.setRawDrawingRenderEnabled(false)
         } catch (_: Throwable) {
         }
     }
 
-    /** A rectangle of the overlay grown by a few pixels and kept on it. */
-    private fun grown(r: RectF): Rect = Rect(
-        (r.left - 6).toInt().coerceAtLeast(0),
-        (r.top - 6).toInt().coerceAtLeast(0),
-        (r.right + 6).toInt().coerceAtMost(overlayW),
-        (r.bottom + 6).toInt().coerceAtMost(overlayH),
-    )
+    /** What the firmware is asked now, in words (for the app's screen). */
+    val drawingArea: String
+        get() {
+            val a = applied ?: return "none"
+            val c = calibration
+            val scale = if (c.scaleX != null || c.scaleY != null) {
+                " – scale measured: %.3f × %.3f".format(c.scaleX ?: 0f, c.scaleY ?: 0f)
+            } else {
+                ""
+            }
+            return "x ${a.limit.l}–${a.limit.r}, y ${a.limit.t}–${a.limit.b} of ${overlayW}×$overlayH, " +
+                "${a.exclude.size} part(s) left out, offset %.0f, %.0f".format(c.offsetX, c.offsetY) + scale
+        }
 
-    /** A pen-up refresh is waiting for the main thread (they are coalesced). */
-    private val penUpPending = java.util.concurrent.atomic.AtomicReference<RectF?>(null)
+    /** Measure where Obsidian's page is again (from the next pen-downs). */
+    private fun recalibrate() {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(calibrationKey()).apply()
+        calibration.reset(0f, guessOffsetY())
+        applied = null
+        applyNow()
+        report()
+    }
+
     /** A "pen near the screen" check is waiting for the main thread (hovers come hundreds of times a second). */
     private val hoverPending = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -505,22 +523,10 @@ class BridgeService : Service() {
             }
         }
 
-        // The pen was lifted and the page is still: show Obsidian's own drawing of the strokes in
-        // the area the firmware drew on, and nowhere else. (Boox Rapid Draw turns the firmware's
-        // layer off here, which repaints the whole area with a flash after every stroke.)
-        override fun onPenUpRefresh(refreshRect: RectF?) {
-            val rect = refreshRect ?: return
-            penUpPending.set(RectF(rect))
-            main.post {
-                val r = penUpPending.getAndSet(null) ?: return@post
-                val v = overlay ?: return@post
-                if (!enabled) return@post
-                try {
-                    EpdController.handwritingRepaint(v, grown(r))
-                } catch (_: Throwable) {
-                }
-            }
-        }
+        // The pen was lifted: nothing to do. The firmware's ink stays where Obsidian draws the same
+        // stroke, and the page is shown afresh only when it changes otherwise (clearInk). Turning
+        // the layer off here, as Boox Rapid Draw does, repaints the whole area after every stroke.
+        override fun onPenUpRefresh(refreshRect: RectF?) {}
     }
 
     // ------------------------------------------------------------------ status
@@ -572,6 +578,7 @@ class BridgeService : Service() {
         const val ACTION_STOP = "io.github.stefanmayer06.inkbridge.STOP"
         const val ACTION_RESCAN = "io.github.stefanmayer06.inkbridge.RESCAN"
         const val ACTION_TEST = "io.github.stefanmayer06.inkbridge.TEST"
+        const val ACTION_RECALIBRATE = "io.github.stefanmayer06.inkbridge.RECALIBRATE"
         private const val CHANNEL = "bridge"
         private const val NOTIFICATION_ID = 1
         private const val PREFS = "bridge"

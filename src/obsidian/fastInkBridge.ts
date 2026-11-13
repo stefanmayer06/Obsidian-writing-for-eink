@@ -59,6 +59,8 @@ const SOCKET_RETRY_MS = 30_000;
 const SOCKET_RETRY_SLOW_MS = 5 * 60_000;
 /** A repaint after the page was drawn again waits until the drawing settles (an erase gesture redraws many times). */
 const REFRESH_SETTLE_MS = 250;
+/** Pen-downs sent at once (not with the next renewal), so the Bridge can measure the page's scale. */
+const PROMPT_DOWNS = 8;
 
 const NO_INPUTS: FastInkInputs = { ready: false, region: null, exclude: [], pen: null, dpr: 1, refreshMs: 800, sideButtonErases: true };
 
@@ -169,6 +171,8 @@ export class FastInkBridge {
   private viewObserver: MutationObserver | null = null;
   private observedEl: HTMLElement | null = null;
   private refreshTimer: number | null = null;
+  /** Pen-downs sent to the Bridge (the first few go at once, for measuring the page). */
+  private downsSent = 0;
   private destroyed = false;
   /**
    * What happened on the ink page the last time it was on screen, for the settings (which
@@ -269,7 +273,9 @@ export class FastInkBridge {
     if (!this.enabled || !this.sent?.armed) return;
     if (this.onPage?.armed) this.onPage.strokes++;
     this.down = { x, y, t: Date.now() };
-    if (!this.bridgeStatus?.calibrated) this.update();
+    // the Bridge measures where the page is, and at what scale, from pen-downs spread over it:
+    // the first few go at once, later ones with the next renewal
+    if (!this.bridgeStatus?.calibrated || this.downsSent < PROMPT_DOWNS) this.update();
   }
 
   /** The last stroke was not ink: the Bridge takes its fast ink off the page. */
@@ -302,7 +308,9 @@ export class FastInkBridge {
     this.observedEl = el;
     if (!el) return;
     this.viewObserver ??= new MutationObserver(() => this.update());
-    this.viewObserver.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style", "hidden"] });
+    // not "style": a swipe or pinch changes the page's transform on every finger move, and measuring
+    // the page each time made page turns lag on e-ink tablets (cards come and go as elements anyway)
+    this.viewObserver.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "hidden"] });
   }
 
   // ------------------------------------------------------------------ sending
@@ -343,6 +351,7 @@ export class FastInkBridge {
     if (!msg.armed && !this.sent) return;
     if (!this.bridgeSeen()) return;
     this.seq = msg.seq;
+    if (msg.down) this.downsSent++;
     this.down = null;
     this.transmit(msg);
   }
