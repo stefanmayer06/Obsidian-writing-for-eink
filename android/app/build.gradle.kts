@@ -12,8 +12,8 @@ android {
         // Android 9: the oldest Boox pen tablets still in use run 10
         minSdk = 28
         targetSdk = 34
-        versionCode = 10
-        versionName = "0.10.0"
+        versionCode = 11
+        versionName = "0.11.0"
         ndk {
             // Boox tablets are ARM; the SDK's native pen reader comes for these
             abiFilters += setOf("armeabi-v7a", "arm64-v8a")

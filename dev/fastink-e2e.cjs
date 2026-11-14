@@ -11,8 +11,8 @@
 // in screen pixels, as on a tablet whose Obsidian window starts 48 px down (the
 // status bar). The page's events carry that screen position too, as Android's
 // WebView fills them (screenY = clientY + 24 CSS px): the plugin reports where its
-// window is, and the Bridge places the page from that before any stroke (its
-// first guess, 40 px, holds only until an event has shown where the window is).
+// window is. Before any event the Bridge already places the page from the
+// window's size and the screen's 48 px status bar; the first hover confirms it.
 //
 // Run (port 80 needs root, like in a container):
 //   (cd android && ./gradlew -q writeTestClasspath) && node dev/build-harness.mjs && node dev/fastink-e2e.cjs
@@ -58,7 +58,7 @@ function startBridge() {
   const cp = fs.readFileSync(path.join(ROOT, "android/app/build/test-classpath.txt"), "utf8").trim();
   const java = spawn(
     "java",
-    ["-cp", cp, "io.github.stefanmayer06.inkbridge.E2eServer", String(PORT), String(VIEW.width * DPR), String(VIEW.height * DPR + SCREEN_Y), String(GUESS_Y)],
+    ["-cp", cp, "io.github.stefanmayer06.inkbridge.E2eServer", String(PORT), String(VIEW.width * DPR), String(VIEW.height * DPR + SCREEN_Y), String(GUESS_Y), "0", String(SCREEN_Y)],
     { stdio: ["ignore", "pipe", "inherit"] },
   );
   return new Promise((resolve, reject) => {
@@ -152,7 +152,11 @@ function startBridge() {
     console.log("Instant ink, plugin ⇄ Bridge (no firmware):");
     let f = await waitFw((m) => m.armed);
     check("pen tool on an open page: the firmware is asked to draw", f?.armed, JSON.stringify(f));
-    check("…on the page, placed by the first guess until an event shows where Obsidian's window is", same(f?.limit, limitFor(GUESS_Y)), `${JSON.stringify(f?.limit)} vs ${JSON.stringify(limitFor(GUESS_Y))}`);
+    check(
+      "…on the page, placed from Obsidian's window size before any event (no guess, nothing measured)",
+      f?.fromWindow && f?.source === "size" && same(f?.limit, limitFor(SCREEN_Y)),
+      `${JSON.stringify({ source: f?.source, limit: f?.limit })} vs ${JSON.stringify(limitFor(SCREEN_Y))}`,
+    );
     check("…with the selected pen (fountain pen, black)", f?.pen?.style === 1 && f?.pen?.color === -16777216, JSON.stringify(f?.pen));
     check(
       "the firmware's area is the page (the paper), not the grey around it",
@@ -162,8 +166,8 @@ function startBridge() {
 
     // the pen only hovers over the page: that event shows where the window is on the screen
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 300, y: 400, pointerType: "pen", buttons: 0, force: 0 });
-    f = await waitFw((m) => m.fromWindow);
-    check("placed from Obsidian's window as soon as the pen hovers, before any stroke", f?.fromWindow && same(f?.limit, limitFor(SCREEN_Y)), `${JSON.stringify(f?.limit)} vs ${JSON.stringify(limitFor(SCREEN_Y))}`);
+    f = await waitFw((m) => m.source === "events");
+    check("…and from its events as soon as the pen hovers, in the same place", f?.source === "events" && same(f?.limit, limitFor(SCREEN_Y)), `${JSON.stringify(f?.limit)} vs ${JSON.stringify(limitFor(SCREEN_Y))}`);
     check("…from the window position the plugin reported (24 CSS px down)", f?.win?.[1] === SCREEN_Y / DPR && f?.offset?.[1] === SCREEN_Y, JSON.stringify({ win: f?.win, offset: f?.offset }));
     check(
       "…and the ink view around the page goes along (hovering there is not leaving the page)",

@@ -262,6 +262,7 @@ class MainActivity : Activity() {
                         else -> "Last message from Ink Notebook ${ago}s ago."
                     },
                 )
+                svc.pluginVersion?.let { append(" Ink Notebook $it.") }
                 append("\n")
                 append(
                     when {

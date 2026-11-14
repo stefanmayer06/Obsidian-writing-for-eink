@@ -13,6 +13,7 @@ import {
   type FastInkInputs,
   type FastInkMessage,
   type FastInkStatus,
+  type FastInkViewport,
   type FastInkWindow,
 } from "../core/fastInk";
 import type { InkSurface } from "../ink/surface";
@@ -133,7 +134,7 @@ export function pageRect(surface: InkSurface, box: DOMRect): CssRect | null {
  */
 export function measureInkPage(
   surface: InkSurface,
-  opts: { refreshMs: number; sideButtonErases: boolean; screen?: { x: number; y: number } | null },
+  opts: { refreshMs: number; sideButtonErases: boolean; screen?: { x: number; y: number } | null; safeTop?: number },
 ): FastInkInputs {
   const doc = surface.el.ownerDocument;
   const win = doc.defaultView ?? window;
@@ -146,6 +147,8 @@ export function measureInkPage(
   const windowOnScreen: FastInkWindow | null = screen
     ? { x: screen.x, y: screen.y, w: win.innerWidth, h: win.innerHeight, sw: win.screen?.width ?? 0, sh: win.screen?.height ?? 0 }
     : null;
+  // always: by its size, the Bridge can tell where a full-screen window is even when no event has said so
+  const vp: FastInkViewport = { w: win.innerWidth, h: win.innerHeight, sw: win.screen?.width ?? 0, sh: win.screen?.height ?? 0, top: opts.safeTop ?? 0 };
   const exclude: CssRect[] = [];
   doc.querySelectorAll<HTMLElement>(UI_SELECTOR).forEach((el) => {
     // only what is really there: a card or tooltip fading out, or kept invisible, takes no ink away
@@ -213,6 +216,7 @@ export function measureInkPage(
     page,
     surface: view,
     win: windowOnScreen,
+    vp,
     pen,
     dpr,
     refreshMs: opts.refreshMs,
@@ -255,6 +259,8 @@ export class FastInkBridge {
   /** Where Obsidian's window is on the screen, from the pen's and fingers' events. */
   private readonly origin = new WindowOrigin();
   private lastLocateAt = Number.NEGATIVE_INFINITY;
+  /** Measures the safe area at the window's top (Obsidian drawing under the status bar); made once. */
+  private safeProbe: HTMLElement | null = null;
   /** When the pen last moved over Obsidian, writing or hovering (performance.now()). */
   private lastPenAt = Number.NEGATIVE_INFINITY;
   private destroyed = false;
@@ -344,6 +350,13 @@ export class FastInkBridge {
     p.registerDomEvent(document, "pointerup", () => this.pressDoneIn(PRESS_DONE_MS), { capture: true, passive: true });
     p.registerDomEvent(document, "pointercancel", () => this.pressDoneIn(PRESS_DONE_MS), { capture: true, passive: true });
     p.registerDomEvent(document, "click", () => this.pressClicked(), { capture: true, passive: true });
+    // the safe area at the top of the window, for the Bridge (made before the observer below, so it
+    // does not count as one of Obsidian's pop-ups coming and going)
+    const probe = document.createElement("div");
+    probe.className = "ink-safe-area-probe";
+    probe.style.cssText = "position:fixed;left:0;top:0;width:0;height:env(safe-area-inset-top, 0px);visibility:hidden;pointer-events:none";
+    document.body.appendChild(probe);
+    this.safeProbe = probe;
     // Obsidian's menus, modals and notices come and go as children of <body>
     this.observer = new MutationObserver(() => this.update());
     this.observer.observe(document.body, { childList: true });
@@ -358,6 +371,8 @@ export class FastInkBridge {
     this.destroyed = true;
     this.observer?.disconnect();
     this.viewObserver?.disconnect();
+    this.safeProbe?.remove();
+    this.safeProbe = null;
     if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
     if (this.pressTimer !== null) window.clearTimeout(this.pressTimer);
     if (this.frame) cancelAnimationFrame(this.frame);
@@ -432,7 +447,7 @@ export class FastInkBridge {
     if (!e.isTrusted || this.destroyed) return;
     if (!press && e.timeStamp - this.lastLocateAt < LOCATE_EVERY_MS) return;
     this.lastLocateAt = e.timeStamp;
-    if (this.origin.add(e.clientX, e.clientY, e.screenX, e.screenY)) this.update();
+    if (this.origin.add(e.clientX, e.clientY, e.screenX, e.screenY, window.devicePixelRatio || 1)) this.update();
   }
 
   /**
@@ -571,7 +586,12 @@ export class FastInkBridge {
     }
     const s = this.plugin.settings;
     const inputs = surface
-      ? measureInkPage(surface, { refreshMs: s.fastInkRefreshMs, sideButtonErases: s.sideButton !== "none", screen: this.origin.value })
+      ? measureInkPage(surface, {
+          refreshMs: s.fastInkRefreshMs,
+          sideButtonErases: s.sideButton !== "none",
+          screen: this.origin.value,
+          safeTop: this.safeProbe?.getBoundingClientRect().height ?? 0,
+        })
       : NO_INPUTS;
     this.notePage(inputs);
     const msg = buildMessage(inputs, {
@@ -581,6 +601,7 @@ export class FastInkBridge {
       clear: this.clearCount,
       ui: this.uiCount,
       uiDone: this.uiDone,
+      app: this.plugin.manifest.version,
       downs: this.recentDowns(now),
     });
     const unchanged = sameRequest(this.sent, msg);

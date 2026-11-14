@@ -28,6 +28,7 @@ const inputs: FastInkInputs = {
   page: { x: 0, y: 56.42, w: 620, h: 877.33 },
   surface: { x: 0, y: 56.4, w: 620, h: 800.2 },
   win: { x: 0, y: 24, w: 620, h: 956.4, sw: 620, sh: 980.4 },
+  vp: { w: 620, h: 956.4, sw: 620, sh: 980.4, top: 0 },
   pen: fastInkPen("fountain", 1.8, "#D32F2F", 1.5, 2),
   dpr: 2,
   refreshMs: 800,
@@ -70,7 +71,7 @@ describe("instant ink messages", () => {
   });
 
   it("builds the message the Bridge app reads (shared with its tests)", () => {
-    const msg = buildMessage(inputs, { seq: 42, now: 1000, leaseMs: 4000, clear: 3, ui: 2, uiDone: 1, down: { x: 100.54, y: 200.25, t: 4000 } });
+    const msg = buildMessage(inputs, { seq: 42, now: 1000, leaseMs: 4000, clear: 3, ui: 2, uiDone: 1, app: "9.9.9-test", down: { x: 100.54, y: 200.25, t: 4000 } });
     const fixture = JSON.parse(readFileSync("android/app/src/test/resources/plugin-message.json", "utf8"));
     expect(msg).toEqual(fixture);
   });
@@ -96,7 +97,9 @@ describe("instant ink messages", () => {
     expect(msg.page).toEqual({ x: 0, y: 56.4, w: 620, h: 877.3 });
     expect(msg.surface).toEqual({ x: 0, y: 56, w: 620, h: 801 });
     expect(msg.win).toEqual({ x: 0, y: 24, w: 620, h: 956.4, sw: 620, sh: 980.4 });
-    // until an event has shown where the window is, none (the Bridge places the page as before)
+    // the window by its size goes along always: the Bridge places the page from it when no event says where it is
+    expect(msg.vp).toEqual({ w: 620, h: 956.4, sw: 620, sh: 980.4, top: 0 });
+    // until events have shown where the window is, none
     const unknown = buildMessage({ ...inputs, win: null, page: null, surface: null }, { seq: 1, now: 0, leaseMs: 1000, clear: 0 });
     expect(unknown.win).toBeUndefined();
     expect(unknown.page).toBeUndefined();
@@ -121,12 +124,23 @@ describe("instant ink messages", () => {
     // events without a screen position say nothing
     expect(o.add(100, 100, 0, 0)).toBe(false);
     expect(o.add(Number.NaN, 1, 2, 3)).toBe(false);
-    // the window really moved (split screen): once most of the recent events say so (3 said 24)
-    for (let i = 0; i < 3; i++) o.add(10, 10, 10, 610);
-    // half and half: still a position the window had, never one between the two
-    expect(o.value).toEqual({ x: 0, y: 24 });
+    // the window really moved (split screen): while the recent events disagree, no position is
+    // given (the Bridge goes by the window's size), then the new one
     expect(o.add(10, 10, 10, 610)).toBe(true);
+    expect(o.value).toBeNull();
+    for (let i = 0; i < 9; i++) o.add(10 + i * 40, 10, 10 + i * 40, 610);
     expect(o.value).toEqual({ x: 0, y: 600 });
+  });
+
+  it("reads screen positions counted in device pixels, and ignores ones that fit no way of counting", () => {
+    // a WebView that gives the screen position in device pixels (ratio 2), the window 24 CSS px down
+    const o = new WindowOrigin();
+    for (const [x, y] of [[100, 100], [500, 300], [300, 800], [600, 900]]) o.add(x, y, x * 2, (y + 24) * 2, 2);
+    expect(o.value).toEqual({ x: 0, y: 24 });
+    // screen positions that are no fixed offset from the window's, counted either way: not used
+    const bad = new WindowOrigin();
+    for (const [x, y] of [[100, 100], [500, 300], [300, 800], [600, 900]]) bad.add(x, y, x * 3, y * 0.5, 2);
+    expect(bad.value).toBeNull();
   });
 
   it("dates a pen-down by its event, not by when JavaScript got to it", () => {

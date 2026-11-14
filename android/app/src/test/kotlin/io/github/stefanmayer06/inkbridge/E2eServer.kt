@@ -14,7 +14,10 @@ import org.json.JSONObject
  * (`[overlayTop]` moves it down, as the status bar does on some tablets). Every request the firmware would get is broadcast
  * as `{"type":"firmware-test",…}`, and the Bridge's status as usual.
  *
- * Run: java -cp <unit test classpath> io.github.stefanmayer06.inkbridge.E2eServer [port] [overlayW] [overlayH] [guessY] [overlayTop]
+ * The overlay spans the screen, whose status bar is `[statusBar]` px high (for placing Obsidian's window by
+ * its size, as the Bridge does when no event says where it is).
+ *
+ * Run: java -cp <unit test classpath> io.github.stefanmayer06.inkbridge.E2eServer [port] [overlayW] [overlayH] [guessY] [overlayTop] [statusBar]
  */
 object E2eServer {
     @JvmStatic
@@ -24,6 +27,7 @@ object E2eServer {
         val h = args.getOrNull(2)?.toInt() ?: 2000
         val guessY = args.getOrNull(3)?.toFloat() ?: 40f
         val overlayTop = args.getOrNull(4)?.toInt() ?: 0
+        val bars = ScreenBars(w, h + overlayTop, statusTop = args.getOrNull(5)?.toInt() ?: 0, navBottom = 0)
         val cal = Calibration(0f, guessY)
         var state: BridgeState? = null
         var lastClear: Long? = null
@@ -42,6 +46,7 @@ object E2eServer {
                 .put("armed", req != null)
                 .put("calibrated", cal.calibrated)
                 .put("fromWindow", cal.fromWindow)
+                .put("source", cal.windowSource)
                 .put("correction", JSONArray(listOf(cal.correctionX.toDouble(), cal.correctionY.toDouble())))
                 .put("offset", JSONArray(listOf(cal.offsetX.toDouble(), cal.offsetY.toDouble())))
                 .put("clears", clears)
@@ -73,10 +78,14 @@ object E2eServer {
                         val s = BridgeState.parse(text)
                         if (s != null) {
                             state = s
-                            // as the Bridge: placed from Obsidian's window when it says where that is
-                            s.win?.let { win ->
+                            // as the Bridge: placed from Obsidian's window when its events say where that is, else by its size
+                            val win = s.win
+                            val vp = s.vp
+                            if (win != null) {
                                 val (x, y) = windowOffset(win, s.dpr, 0, overlayTop)
-                                cal.placeFromWindow(x, y)
+                                cal.placeFromWindow(x, y, "events")
+                            } else if (vp != null) {
+                                windowFromViewport(vp, s.dpr, bars)?.let { (x, y) -> cal.placeFromWindow(x, y - overlayTop, "size") }
                             }
                             val req = firmwareRequest(s, cal, w, h, System.currentTimeMillis())
                             for (d in s.allDowns) {
