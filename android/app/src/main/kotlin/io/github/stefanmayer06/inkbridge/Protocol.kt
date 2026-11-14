@@ -213,6 +213,8 @@ data class BridgeState(
             area: String? = null,
             /** How the page was placed on screen, in words (from Obsidian's window, measured, guessed). */
             placement: String? = null,
+            /** Strokes during which the firmware was kept off because the pen was already down when it was to switch on. */
+            lateSwitchOns: Int = 0,
         ): String = JSONObject()
             .put("v", VERSION)
             .put("type", "status")
@@ -231,11 +233,12 @@ data class BridgeState(
             .apply { if (lastMissed != null) put("lastMissed", JSONObject().put("x", lastMissed.x.toDouble()).put("y", lastMissed.y.toDouble())) }
             .apply { if (area != null) put("area", area) }
             .apply { if (placement != null) put("placement", placement) }
+            .put("lateSwitchOns", lateSwitchOns)
             .toString()
     }
 }
 
 /** The app version without depending on generated BuildConfig in unit tests. */
 object BuildConfigInfo {
-    const val VERSION_NAME = "0.9.0"
+    const val VERSION_NAME = "0.10.0"
 }

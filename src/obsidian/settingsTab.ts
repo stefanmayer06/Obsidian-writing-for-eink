@@ -99,6 +99,7 @@ export class InkSettingTab extends PluginSettingTab {
           text += ` ${s.missed} stroke(s) were outside the firmware's drawing area${at}; Ink Notebook's own drawing showed them instead.`;
           if (s.area) text += ` Drawing area: ${s.area}.`;
         }
+        if (s?.lateSwitchOns) text += ` ${s.lateSwitchOns} stroke(s) began just as the firmware was to draw again; it waited for the pen to lift, and Ink Notebook's own drawing showed them.`;
         if (s?.error) text += ` Problem: ${s.error}`;
         return text;
       }

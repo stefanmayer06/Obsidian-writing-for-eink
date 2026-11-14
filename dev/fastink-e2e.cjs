@@ -290,6 +290,21 @@ function startBridge() {
     await page.evaluate(() => document.getElementById("fab").remove());
     f = await waitFw((m) => m.armed && m.exclude.length === 0);
 
+    // a tooltip over the page takes no presses (Obsidian's have pointer-events: none): the pen writes
+    // through it, so the firmware must draw there too – left out, those strokes showed nowhere
+    await page.evaluate(() => {
+      const t = document.createElement("div");
+      t.className = "tooltip";
+      t.id = "tip";
+      t.textContent = "Fountain pen";
+      t.style.cssText = "position:fixed;left:200px;top:150px;width:160px;height:40px;z-index:60;pointer-events:none;background:#333;color:#fff";
+      document.body.appendChild(t);
+    });
+    await page.waitForTimeout(400);
+    f = await last();
+    check("a tooltip over the page is not left out (the pen writes through it)", f?.armed && f.exclude.length === 0, JSON.stringify(f?.exclude));
+    await page.evaluate(() => document.getElementById("tip").remove());
+
     // a stroke that is not ink after all: hold to snap turns it into a line
     // writing on the page is not a press elsewhere
     const uiWriting = f?.ui ?? 0;

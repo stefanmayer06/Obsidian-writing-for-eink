@@ -103,6 +103,19 @@ class BridgeService : Service() {
     /** What the firmware's pen reader reported (to tell whether the firmware path works on this tablet). */
     @Volatile var penHovers = 0
         private set
+    /**
+     * The pen touches the screen, by the pen reader's own thread (which reports in order, ahead of the
+     * main thread): the firmware is never switched on while this holds.
+     */
+    @Volatile private var penIsDown = false
+    /** When the pen reader last reported the pen hovering (wall clock ms, its thread). */
+    @Volatile private var lastHoverAt = 0L
+    /** The hover reports paused (the pen touched something, or went out of reach) since the main thread last looked. */
+    private val hoverGap = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** Strokes during which the firmware was not switched on because the pen was already down (it is at the pen-up). */
+    @Volatile var lateSwitchOns = 0
+        private set
+    private var lateThisStroke = false
     @Volatile var penStrokes = 0
         private set
 
@@ -555,7 +568,14 @@ class BridgeService : Service() {
      * toolbar, cards, a new page).
      */
     private fun syncInk(h: TouchHelper, penChanged: Boolean = false) {
-        val want = enabled && gate.draws
+        // never switched on while the pen touches: the firmware would not draw that stroke, and the
+        // panel would stop showing Obsidian's drawing of it (it is switched on at the pen-up instead)
+        val late = enabled && gate.draws && penIsDown && !h.isRawDrawingRenderEnabled
+        if (late && !lateThisStroke) {
+            lateThisStroke = true
+            lateSwitchOns++
+        }
+        val want = enabled && gate.draws && !late
         if (renderLog.lastOrNull()?.second != want) {
             renderLog.addLast(kotlin.Pair(System.currentTimeMillis(), want))
             while (renderLog.size > 64) renderLog.removeFirst()
@@ -579,11 +599,18 @@ class BridgeService : Service() {
         }
     }
 
-    private val releaseWithoutHover = Runnable {
-        val h = helper ?: return@Runnable
-        if (!enabled || penHovers > 0) return@Runnable
-        gate.hover(InkGate.Zone.PAGE, System.currentTimeMillis())
-        syncInk(h)
+    private val releaseWithoutHover: Runnable = object : Runnable {
+        override fun run() {
+            val h = helper ?: return
+            if (!enabled || penHovers > 0) return
+            // not mid-stroke: again a moment later
+            if (penIsDown) {
+                main.postDelayed(this, NO_HOVER_RELEASE_MS)
+                return
+            }
+            gate.hover(InkGate.Zone.PAGE, System.currentTimeMillis())
+            syncInk(h)
+        }
     }
 
     /** The pen hovers at (x, y) in the overlay: over the page, its edge, or a toolbar. */
@@ -591,7 +618,12 @@ class BridgeService : Service() {
         val h = helper ?: return
         val r = applied ?: return
         if (!enabled || testHelper != null) return
-        gate.hover(zoneOf(x, y, r), System.currentTimeMillis())
+        // a report that waited here while the pen touched down changes nothing: the pen reader says the
+        // pen is down, or its hover reports have stopped (a pen-down outside the firmware's area is not
+        // reported at all, only the hover reports stop)
+        val now = System.currentTimeMillis()
+        val stale = now - lastHoverAt > HOVER_GAP_MS
+        gate.hover(zoneOf(x, y, r), now, gap = hoverGap.getAndSet(false), penDown = penIsDown || stale)
         syncInk(h)
     }
 
@@ -662,6 +694,8 @@ class BridgeService : Service() {
 
     private val callback = object : RawInputCallback() {
         override fun onBeginRawDrawing(b: Boolean, p: TouchPoint?) {
+            // first, on the pen reader's thread: no hover report still on its way may switch the firmware on now
+            penIsDown = true
             penStrokes++
             val t = System.currentTimeMillis()
             val x = p?.x
@@ -682,7 +716,9 @@ class BridgeService : Service() {
         }
 
         override fun onEndRawDrawing(b: Boolean, p: TouchPoint?) {
+            penIsDown = false
             onMain {
+                lateThisStroke = false
                 gate.penUp()
                 helper?.let { syncInk(it) }
             }
@@ -699,6 +735,12 @@ class BridgeService : Service() {
         // once held up the plugin's pen and colour changes for seconds).
         override fun onPenActive(point: TouchPoint?) {
             penHovers++
+            // hovering, so not touching (also after a pen-up that was not reported); a pause in the
+            // reports means the pen touched something or went out of reach
+            val now = System.currentTimeMillis()
+            if (now - lastHoverAt > HOVER_GAP_MS) hoverGap.set(true)
+            lastHoverAt = now
+            penIsDown = false
             val p = point ?: return
             if (Looper.myLooper() === Looper.getMainLooper()) {
                 onHover(p.x, p.y)
@@ -728,9 +770,10 @@ class BridgeService : Service() {
             enabled, c.calibrated, c.offsetX, c.offsetY, transport, error, state?.seq ?: 0, penHovers, penStrokes,
             paused = gate.reason, missed = strokes.missed, lastMissed = strokes.lastMissed, area = drawingArea,
             placement = placement,
+            lateSwitchOns = lateSwitchOns,
         )
         socket?.send(json)
-        val key = "$enabled|${c.calibrated}|${c.fromWindow}|${c.correctionX},${c.correctionY}|$transport|$error|$penStrokes|${strokes.missed}"
+        val key = "$enabled|${c.calibrated}|${c.fromWindow}|${c.correctionX},${c.correctionY}|$transport|$error|$penStrokes|${strokes.missed}|$lateSwitchOns"
         val now = System.currentTimeMillis()
         if (force || key != lastStatusKey || now - lastStatusWrite > STATUS_EVERY_MS) {
             file?.writeStatus(json)
@@ -780,6 +823,8 @@ class BridgeService : Service() {
         private const val LEASE_CHECK_MS = 500L
         /** Without hover reports, the firmware draws again this long after it paused. */
         private const val NO_HOVER_RELEASE_MS = 300L
+        /** Hover reports further apart than this mean the pen touched something (or went out of reach) in between. */
+        private const val HOVER_GAP_MS = 40L
         /** A missed stroke this far inside the drawing area (px) means the placement is wrong. */
         private const val INSIDE_MARGIN_PX = 40
         /** With the page placed from Obsidian's window, a pen-down this far inside the page (px) must be drawn by the firmware. */

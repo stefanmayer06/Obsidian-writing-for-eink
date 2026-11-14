@@ -40,22 +40,71 @@ class InkGateTest {
     }
 
     @Test
-    fun pausesOverAToolbarAndWaitsForThePluginsWord() {
+    fun pausesOverAToolbarAndDrawsAgainTheMomentThePenIsBack() {
         val g = armedOverPage()
         g.hover(Zone.AWAY, 100)
         g.hover(Zone.AWAY, 170)
         assertFalse("paused while the pen is over the toolbar", g.draws)
         assertNotNull(g.reason)
-        // back over the page at once: the plugin may still be sending what was picked
-        g.hover(Zone.PAGE, 200)
+        // it only hovered there (no pause in the hover reports): nothing can have been pressed, so the
+        // firmware draws again at once – long before the pen touches the page, not just as it does
+        g.hover(Zone.PAGE, 180)
+        assertTrue(g.draws)
+    }
+
+    @Test
+    fun afterTouchingSomethingOnTheVisitItWaitsForThePluginsWord() {
+        val g = armedOverPage()
+        g.hover(Zone.AWAY, 100)
+        g.hover(Zone.AWAY, 170)
+        // the hover reports paused: the pen touched a button, then hovers over it again
+        g.hover(Zone.AWAY, 300, gap = true)
+        // back over the page: the plugin may still be sending what was picked
+        g.hover(Zone.PAGE, 320)
         assertFalse(g.draws)
         // a state the plugin sent before the visit does not count
         g.stateSent(90)
-        g.hover(Zone.PAGE, 210)
+        g.hover(Zone.PAGE, 330)
         assertFalse(g.draws)
         // one sent after it does
-        g.stateSent(180)
-        g.hover(Zone.PAGE, 220)
+        g.stateSent(310)
+        g.hover(Zone.PAGE, 340)
+        assertTrue(g.draws)
+    }
+
+    @Test
+    fun aQuickTapOnAToolbarCounts() {
+        // touched before the pen hovered there long enough to make it a visit
+        val g = armedOverPage()
+        g.hover(Zone.AWAY, 100)
+        g.hover(Zone.AWAY, 130, gap = true)
+        g.hover(Zone.AWAY, 200)
+        assertFalse(g.draws)
+        g.hover(Zone.PAGE, 250)
+        assertFalse("waits for what the tap picked", g.draws)
+        g.hover(Zone.PAGE, 351)
+        assertTrue(g.draws)
+    }
+
+    @Test
+    fun aHoverReportThatCameLateWhileThePenTouchesChangesNothing() {
+        // paused (the page changed); a hover report over the page waited for the main thread while the
+        // pen touched down: switching on now would be mid-stroke – the stroke would not be drawn by the
+        // firmware, nor shown by Obsidian
+        val g = armedOverPage()
+        g.cleared()
+        g.hover(Zone.PAGE, 100, penDown = true)
+        assertFalse(g.draws)
+        // the pen-up comes, then hovering again: drawing
+        g.hover(Zone.PAGE, 300)
+        assertTrue(g.draws)
+    }
+
+    @Test
+    fun liftingThePenOutOfReachOverThePageIsNoVisit() {
+        val g = armedOverPage()
+        g.cleared()
+        g.hover(Zone.PAGE, 1000, gap = true)
         assertTrue(g.draws)
     }
 
@@ -63,7 +112,7 @@ class InkGateTest {
     fun withoutNewsItDrawsAgainAMomentAfterTheVisit() {
         val g = armedOverPage()
         g.hover(Zone.AWAY, 100)
-        g.hover(Zone.AWAY, 200) // last hover over the toolbar
+        g.hover(Zone.AWAY, 200, gap = true) // last hover over the toolbar, after a touch there
         g.hover(Zone.PAGE, 300)
         assertFalse(g.draws)
         g.hover(Zone.PAGE, 349)

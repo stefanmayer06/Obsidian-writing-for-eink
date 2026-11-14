@@ -278,6 +278,9 @@ class MainActivity : Activity() {
                     if (m != null) append(" (the last at x %.0f, y %.0f in Obsidian)".format(m.x, m.y))
                     append(". Ink Notebook's own drawing showed them instead.")
                 }
+                if (svc.lateSwitchOns > 0) {
+                    append("\nStrokes begun just before the firmware was to draw again: ${svc.lateSwitchOns} (it waited for the pen-up; Ink Notebook's own drawing showed them).")
+                }
                 if (svc.touchEvents > 0) append(" Pen events to the Bridge: ${svc.touchEvents}.")
                 append("\n")
                 append("Position: ${svc.placement}.")
