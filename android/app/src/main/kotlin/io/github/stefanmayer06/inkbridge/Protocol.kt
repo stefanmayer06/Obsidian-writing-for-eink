@@ -242,6 +242,10 @@ data class BridgeState(
             placement: String? = null,
             /** Strokes during which the firmware was kept off because the pen was already down when it was to switch on. */
             lateSwitchOns: Int = 0,
+            /** The build of Ink Notebook this app carries (the plugin compares it with its own). */
+            pluginBuild: String? = null,
+            /** What happened on the last ink page, in words (for the plugin's settings). */
+            session: String? = null,
         ): String = JSONObject()
             .put("v", VERSION)
             .put("type", "status")
@@ -261,11 +265,13 @@ data class BridgeState(
             .apply { if (area != null) put("area", area) }
             .apply { if (placement != null) put("placement", placement) }
             .put("lateSwitchOns", lateSwitchOns)
+            .apply { if (pluginBuild != null) put("pluginBuild", pluginBuild) }
+            .apply { if (session != null) put("session", session) }
             .toString()
     }
 }
 
 /** The app version without depending on generated BuildConfig in unit tests. */
 object BuildConfigInfo {
-    const val VERSION_NAME = "0.11.0"
+    const val VERSION_NAME = "0.12.0"
 }

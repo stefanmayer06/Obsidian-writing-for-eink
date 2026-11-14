@@ -34,6 +34,17 @@ class StrokeCheck(
         private set
     var lastMissed: PenDown? = null
         private set
+    /** Strokes the firmware drew (the plugin's pen-down had one of the firmware's), since the Bridge started. */
+    var drawn = 0
+        private set
+
+    /**
+     * How far in time the firmware's nearest pen-down is from [t] (ms; negative: before it), or null
+     * when it reported none lately. For a stroke counted as not drawn this tells why: none at all (the
+     * pen was outside what the firmware reads), or one some hundred ms earlier (the plugin's time for
+     * the pen-down was late: an older plugin dates it when it gets to it, not when it happened).
+     */
+    fun nearestFirmware(t: Long): Long? = firmware.minByOrNull { abs(it - t) }?.let { it - t }
 
     /** The firmware's pen reader reported a pen-down (it draws this stroke). */
     fun firmwareDown(t: Long) {
@@ -62,7 +73,10 @@ class StrokeCheck(
         while (iter.hasNext()) {
             val d = iter.next()
             when {
-                firmware.any { f -> abs(f - d.t) <= windowMs } -> iter.remove()
+                firmware.any { f -> abs(f - d.t) <= windowMs } -> {
+                    iter.remove()
+                    drawn++
+                }
                 now >= d.t + waitMs -> {
                     iter.remove()
                     missed++

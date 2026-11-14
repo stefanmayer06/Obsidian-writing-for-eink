@@ -1,5 +1,6 @@
 node_modules/
 main.js
+build-id.txt
 *.js.map
 data.json
 ocr-cache.json

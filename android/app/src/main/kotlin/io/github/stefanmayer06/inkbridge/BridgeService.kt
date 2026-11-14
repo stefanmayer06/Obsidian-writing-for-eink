@@ -124,6 +124,13 @@ class BridgeService : Service() {
     @Volatile var penStrokes = 0
         private set
 
+    /** The pen reader's counts when the last test began (the test's own are what came since). */
+    private var testHovers0 = 0
+    private var testStrokes0 = 0
+    private var testRan = false
+    /** What the pen reader reported during the last test, or null when none ran. */
+    val testCounts: kotlin.Pair<Int, Int>? get() = if (testRan) kotlin.Pair(penHovers - testHovers0, penStrokes - testStrokes0) else null
+
     /** When the plugin last sent its state (for the app's screen). */
     var lastMessageAt = 0L
         private set
@@ -139,8 +146,6 @@ class BridgeService : Service() {
     val isTesting: Boolean get() = testUntil > System.currentTimeMillis()
     val testName: String get() = testNameOf(testFeature)
     val isCalibrated: Boolean get() = calibration.calibrated
-    /** The plugin's version, when it says (newer ones do). */
-    val pluginVersion: String? get() = state?.app
     val transportName: String get() = transport
     val lastError: String? get() = error
     val bridgeDirs get() = file?.bridgeDirs ?: emptyList()
@@ -166,6 +171,14 @@ class BridgeService : Service() {
         val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenOff, filter, RECEIVER_NOT_EXPORTED) else registerReceiver(screenOff, filter)
         main.postDelayed(leaseCheck, LEASE_CHECK_MS)
+        // the plugin in the vault follows this app (when the user asked for that once): after an update
+        // of the app, the plugin it goes with is put into the vault, and Obsidian loads it when it next starts
+        if (PluginBundle.keepsMatched(this)) {
+            Thread {
+                val (done, _) = PluginBundle.updateOlder(this, Vaults.bridgeDirs(this))
+                if (done.isNotEmpty()) pluginsUpdated = done
+            }.start()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -283,18 +296,29 @@ class BridgeService : Service() {
     }
 
     /**
-     * Where Obsidian's window is: from its events when it reports that, else from its size and the
-     * screen's bars; only a plugin that says neither (older than this Bridge) leaves it to be measured
-     * from strokes.
+     * Where Obsidian's window is: from its size and the screen's bars when that fits one full-screen
+     * layout (hard facts on both sides), else from the screen positions in its events (a split screen,
+     * a floating window); only a plugin that says neither (older than this Bridge) leaves it to be
+     * measured from strokes.
      */
     private fun place(s: BridgeState) {
+        val bySize = s.vp?.let { vp -> bars?.let { windowFromViewport(vp, s.dpr, it) } }
         val win = s.win
-        if (win != null) return placeFromWindow(win, s.dpr)
-        val vp = s.vp ?: return
-        val b = bars ?: return
-        val (x, y) = windowFromViewport(vp, s.dpr, b) ?: return
-        if (calibration.placeFromWindow(x - overlayLeft, y - overlayTop, "size")) applied = null
+        eventsDisagree = null
+        if (bySize != null) {
+            if (win != null) {
+                val dx = win.x * s.dpr - bySize.first
+                val dy = win.y * s.dpr - bySize.second
+                if (kotlin.math.abs(dx) > 3f || kotlin.math.abs(dy) > 3f) eventsDisagree = kotlin.Pair(dx, dy)
+            }
+            if (calibration.placeFromWindow(bySize.first - overlayLeft, bySize.second - overlayTop, "size")) applied = null
+        } else if (win != null) {
+            placeFromWindow(win, s.dpr)
+        }
     }
+
+    /** Obsidian's events put its window this far (px) from where its size does (null: they agree, or one is missing). */
+    private var eventsDisagree: kotlin.Pair<Float, Float>? = null
 
     /** The screen's size and system bars, as Android tells the overlay (which spans the whole screen). */
     private fun readBars(view: View, insets: WindowInsets) {
@@ -310,10 +334,14 @@ class BridgeService : Service() {
             val st = insets.getInsetsIgnoringVisibility(WindowInsets.Type.statusBars())
             val nav = insets.getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars())
             val shown = insets.isVisible(WindowInsets.Type.navigationBars())
-            ScreenBars(size.x, size.y, st.top, if (shown) nav.bottom else 0, if (shown) nav.left else 0, if (shown) nav.right else 0)
+            // an overlay may be told of no status bar on some firmware: the system's own height for it then
+            ScreenBars(size.x, size.y, if (st.top > 0) st.top else statusBarHeight(), if (shown) nav.bottom else 0, if (shown) nav.left else 0, if (shown) nav.right else 0)
         } else {
             @Suppress("DEPRECATION")
-            ScreenBars(size.x, size.y, insets.stableInsetTop, insets.stableInsetBottom, insets.stableInsetLeft, insets.stableInsetRight)
+            ScreenBars(
+                size.x, size.y, if (insets.stableInsetTop > 0) insets.stableInsetTop else statusBarHeight(),
+                insets.stableInsetBottom, insets.stableInsetLeft, insets.stableInsetRight,
+            )
         }
         if (next == bars) return
         bars = next
@@ -379,11 +407,23 @@ class BridgeService : Service() {
         for (d in s.allDowns) {
             // each pen-down once (later messages repeat the last few)
             if (!strokes.pluginDown(d)) continue
+            strokesWritten++
             // only a stroke while the firmware was drawing must have a pen-down of the firmware's – and,
             // with the page placed from Obsidian's window, only one that began on the page: off the page
-            // (the grey around it, where no ink stays) the firmware does not draw, by design. On the page
-            // but where the firmware cannot draw (past the overlay) it counts: the firmware pauses for it.
-            if (!wasDrawingAt(d.t) || (placed != null && !onPage(d, s.dpr, placed))) strokes.forget(d)
+            // (the grey around it, where no ink stays) the firmware does not draw, by design. Anywhere on
+            // the page it counts, also where the firmware was told not to draw (a part left out) or
+            // cannot: the plugin reports only pen-downs that reached the page, so that stroke is ink,
+            // and the firmware pauses for it so that it shows.
+            when {
+                !wasDrawingAt(d.t) -> {
+                    strokesWhilePaused++
+                    strokes.forget(d)
+                }
+                placed != null && !onPage(d, s.dpr, placed) -> {
+                    strokesOffPage++
+                    strokes.forget(d)
+                }
+            }
             if (calibration.match(d, s.dpr)) {
                 saveCalibration()
                 applied = null
@@ -418,6 +458,10 @@ class BridgeService : Service() {
             }
             val s = state
             val r = applied
+            for (d in misses) {
+                notDrawn.addLast(Miss(d, describeMiss(d, s?.dpr ?: 1f, pageRequest), now))
+                while (notDrawn.size > MISSES_KEPT) notDrawn.removeFirst()
+            }
             if (s != null && r != null && misses.any { placedInside(it, s.dpr, r, INSIDE_MARGIN_PX) } && calibration.distrustScale(s.dpr)) {
                 saveCalibration()
                 applied = null
@@ -428,12 +472,49 @@ class BridgeService : Service() {
         strokes.nextCheckAt()?.let { main.postDelayed(strokeCheck, maxOf(10L, it - now)) }
     }
 
-    /** By the current placement, the pen-down is on the page (where ink stays) and not under something left out. */
+    /** By the current placement, the pen-down is on the page (where ink stays). */
     private fun onPage(d: PenDown, dpr: Float, r: FirmwareRequest): Boolean {
         val (x, y) = calibration.pointToPx(d.x, d.y, dpr)
         val m = ON_PAGE_MARGIN_PX
         val p = r.page
-        return x >= p.l + m && x < p.r - m && y >= p.t + m && y < p.b - m && r.exclude.none { it.contains(x, y, m) }
+        return x >= p.l + m && x < p.r - m && y >= p.t + m && y < p.b - m
+    }
+
+    /** A stroke the firmware did not draw, and what the Bridge knows about why. */
+    private data class Miss(val d: PenDown, val why: String, val at: Long)
+
+    /** The last strokes the firmware did not draw (for the app's screen: where, and why). */
+    private val notDrawn = ArrayDeque<Miss>()
+    /** The plugin's pen-downs since the Bridge started: all, those while the firmware was paused, those off the page. */
+    private var strokesWritten = 0
+    private var strokesWhilePaused = 0
+    private var strokesOffPage = 0
+    /** What the firmware was last asked for Obsidian's page (not for a test), and when. */
+    private var pageRequest: FirmwareRequest? = null
+    private var pageRequestAt = 0L
+
+    /** Where a stroke the firmware did not draw began, by what the firmware was asked, and what its pen reader said. */
+    private fun describeMiss(d: PenDown, dpr: Float, r: FirmwareRequest?): String {
+        val (x, y) = calibration.pointToPx(d.x, d.y, dpr)
+        val where = when {
+            r == null -> "no drawing area was set"
+            else -> {
+                val ex = r.exclude.firstOrNull { it.contains(x, y) }
+                val l = r.limit
+                when {
+                    ex != null -> "under a part left out (x ${ex.l}–${ex.r}, y ${ex.t}–${ex.b})"
+                    !l.contains(x, y) -> "outside the firmware's area (x ${l.l}–${l.r}, y ${l.t}–${l.b})"
+                    else -> "inside the firmware's area"
+                }
+            }
+        }
+        val near = strokes.nearestFirmware(d.t)
+        val reader = when {
+            near == null || kotlin.math.abs(near) > 5000 -> "its pen reader reported no pen-down"
+            near < 0 -> "its pen reader's nearest pen-down was ${-near} ms earlier"
+            else -> "its pen reader's nearest pen-down was $near ms later"
+        }
+        return "at %.0f, %.0f px (%.0f, %.0f in Obsidian), %s; %s".format(x, y, d.x, d.y, where, reader)
     }
 
     /** By the current placement, the pen-down is at least [m] pixels inside the firmware's drawing area. */
@@ -482,8 +563,9 @@ class BridgeService : Service() {
         endAppTest()
         testFeature = feature
         testUntil = System.currentTimeMillis() + TEST_MS
-        penHovers = 0
-        penStrokes = 0
+        testHovers0 = penHovers
+        testStrokes0 = penStrokes
+        testRan = true
         touchEvents = 0
         if (feature == TouchHelper.FEATURE_SF_TOUCH_RENDER) {
             applied = null
@@ -594,7 +676,10 @@ class BridgeService : Service() {
         if (testUntil > now && overlayW > 0 && testFeature == TouchHelper.FEATURE_SF_TOUCH_RENDER) {
             return FirmwareRequest(PxRect(0, 0, overlayW, overlayH), emptyList(), PenSpec(BridgeState.STYLE_PENCIL, 3f, 0xFF000000.toInt()), 1000, true)
         }
-        return firmwareRequest(state, calibration, overlayW, overlayH, now)
+        return firmwareRequest(state, calibration, overlayW, overlayH, now)?.also {
+            pageRequest = it
+            pageRequestAt = now
+        }
     }
 
     private fun applyNow() {
@@ -719,9 +804,55 @@ class BridgeService : Service() {
                 val dpr = state?.dpr ?: 1f
                 ", page %.0f×%.0f px".format(p.w * dpr, p.h * dpr)
             } ?: ""
-            val screen = bars?.let { b -> if (b.w != overlayW || b.h != overlayH) " (screen ${b.w}×${b.h})" else "" } ?: ""
+            val screen = bars?.let { b ->
+                (if (b.w != overlayW || b.h != overlayH) " (screen ${b.w}×${b.h})" else "") + ", status bar ${b.statusTop} px" + (if (b.navBottom > 0) ", navigation bar ${b.navBottom} px" else "")
+            } ?: ""
             return "x ${a.limit.l}–${a.limit.r}, y ${a.limit.t}–${a.limit.b} of ${overlayW}×$overlayH$screen$page, " +
                 "${a.exclude.size} part(s) left out, offset %.0f, %.0f".format(c.offsetX, c.offsetY) + scale
+        }
+
+    /** The build of the plugin that is talking to the Bridge, when it names one (version, build). */
+    val pluginReported: kotlin.Pair<String, String?>? get() = PluginBundle.parseReported(state?.app)
+
+    /** Vaults whose plugin this Bridge updated when it started (their plugin folders), for the app's screen. */
+    @Volatile var pluginsUpdated: List<java.io.File> = emptyList()
+        private set
+
+    /** The page the firmware was last asked to draw on in Obsidian, in words: its area and the parts left out. */
+    val pageArea: String
+        get() {
+            val r = pageRequest ?: return "none yet (open an ink page with a pen selected)"
+            val l = r.limit
+            val sb = StringBuilder("x ${l.l}–${l.r}, y ${l.t}–${l.b} of ${overlayW}×$overlayH px")
+            r.surface?.let { v -> sb.append("; ink view x ${v.l}–${v.r}, y ${v.t}–${v.b}") }
+            if (r.exclude.isEmpty()) {
+                sb.append("; nothing left out")
+            } else {
+                sb.append("; ${r.exclude.size} part(s) left out: ")
+                sb.append(r.exclude.take(4).joinToString("; ") { "x ${it.l}–${it.r}, y ${it.t}–${it.b}" })
+                if (r.exclude.size > 4) sb.append("; …")
+            }
+            return sb.toString()
+        }
+
+    /** The strokes written in Obsidian since the Bridge started, in words: how many the firmware drew, and how many not. */
+    val strokeCounts: String
+        get() {
+            val sb = StringBuilder("$strokesWritten written with instant ink on: ${strokes.drawn} drawn by the firmware, ${strokes.missed} not")
+            if (strokesWhilePaused > 0) sb.append(", $strokesWhilePaused while it was paused")
+            if (strokesOffPage > 0) sb.append(", $strokesOffPage off the page")
+            return sb.toString()
+        }
+
+    /** The last strokes the firmware did not draw: where each began and why, newest first. */
+    val notDrawnLog: List<String> get() = notDrawn.reversed().map { it.why }
+
+    /** The last ink page in a few words, for the plugin's settings. */
+    private val sessionSummary: String
+        get() {
+            val sb = StringBuilder("page $pageArea. Strokes: $strokeCounts.")
+            notDrawn.lastOrNull()?.let { sb.append(" Last not drawn: ${it.why}.") }
+            return sb.toString()
         }
 
     /** How the page is placed on screen, in words (for the app's screen and the plugin's settings). */
@@ -740,6 +871,7 @@ class BridgeService : Service() {
                         sb.append(", shifted by %.0f, %.0f px to where the firmware's pen-downs are".format(c.correctionX, c.correctionY))
                     }
                     c.checkedOff?.let { (x, y) -> sb.append("; the firmware's pen-downs are %.0f, %.0f px from it".format(x, y)) }
+                    eventsDisagree?.let { (x, y) -> sb.append("; Obsidian's events put the window %.0f, %.0f px from there (not used)".format(x, y)) }
                     sb.toString()
                 }
                 c.fromWindow && w != null -> {
@@ -755,16 +887,24 @@ class BridgeService : Service() {
                     "measured from strokes: this Ink Notebook is older than the Bridge and does not say where its window is – update Ink Notebook"
                 s != null && s.vp == null -> "estimated (below the status bar): this Ink Notebook is older than the Bridge – update Ink Notebook"
                 c.fromWindow -> "from Obsidian's window, as it last said (its events disagree just now: has the window moved?)"
-                c.calibrated -> "measured from strokes: Obsidian's window fits no full-screen layout (split screen?)"
-                else -> "estimated (below the status bar) until Obsidian says where its window is"
+                c.calibrated -> "measured from strokes: ${noFit(s)}"
+                else -> "estimated (below the status bar): ${noFit(s)}"
             }
         }
+
+    /** Why the window's size did not say where it is, with the numbers (to tell what layout the tablet has). */
+    private fun noFit(s: BridgeState?): String {
+        val vp = s?.vp ?: return "Obsidian has not said where its window is"
+        val b = bars ?: return "the screen's bars are not known yet"
+        return "Obsidian's window (%.0f×%.0f px) fits no full-screen layout of the %d×%d screen (status bar %d px, navigation bar %d px), and its events do not say where it is"
+            .format(vp.w * s.dpr, vp.h * s.dpr, b.w, b.h, b.statusTop, b.navBottom)
+    }
 
     /** Place Obsidian's page again: from its window when it says where that is, else from the next pen-downs. */
     private fun recalibrate() {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(calibrationKey()).remove(correctionKey()).apply()
         calibration.reset(0f, guessOffsetY())
-        state?.win?.let { placeFromWindow(it, state!!.dpr) }
+        state?.let { place(it) }
         applied = null
         applyNow()
         report()
@@ -859,6 +999,8 @@ class BridgeService : Service() {
             paused = gate.reason, missed = strokes.missed, lastMissed = strokes.lastMissed, area = drawingArea,
             placement = placement,
             lateSwitchOns = lateSwitchOns,
+            pluginBuild = PluginBundle.bundled(this)?.build,
+            session = if (pageRequest != null) sessionSummary else null,
         )
         socket?.send(json)
         val key = "$enabled|${c.calibrated}|${c.fromWindow}|${c.correctionX},${c.correctionY}|$transport|$error|$penStrokes|${strokes.missed}|$lateSwitchOns"
@@ -917,6 +1059,8 @@ class BridgeService : Service() {
         private const val INSIDE_MARGIN_PX = 40
         /** With the page placed from Obsidian's window, a pen-down this far inside the page (px) must be drawn by the firmware. */
         private const val ON_PAGE_MARGIN_PX = 2
+        /** Strokes the firmware did not draw that are kept for the app's screen. */
+        private const val MISSES_KEPT = 5
         private const val STATUS_EVERY_MS = 5_000L
         const val TEST_MS = 30_000L
         const val EXTRA_FEATURE = "feature"
