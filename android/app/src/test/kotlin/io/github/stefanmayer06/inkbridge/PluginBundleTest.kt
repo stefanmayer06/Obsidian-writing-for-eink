@@ -94,6 +94,14 @@ class PluginBundleTest {
             val err = PluginBundle.install(dir) { throw java.io.IOException("no such asset: $it") }
             assertTrue(err!!.contains("no such asset"))
             assertFalse(PluginBundle.installed(dir).exists)
+            // one file missing: the old plugin stays whole (nothing replaced, nothing left lying around)
+            File(dir, "main.js").writeText("module.exports = 'old'")
+            File(dir, "styles.css").writeText(".old{}")
+            val half = PluginBundle.install(dir) { name -> if (name == "main.js") throw java.io.IOException("no main.js") else "new".toByteArray() }
+            assertTrue(half!!.contains("no main.js"))
+            assertEquals("module.exports = 'old'", File(dir, "main.js").readText())
+            assertEquals(".old{}", File(dir, "styles.css").readText())
+            assertFalse(dir.list()!!.any { it.endsWith(".bridge-tmp") })
         } finally {
             root.deleteRecursively()
         }

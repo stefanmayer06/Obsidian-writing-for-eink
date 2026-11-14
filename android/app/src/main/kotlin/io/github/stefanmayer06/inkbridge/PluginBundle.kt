@@ -141,29 +141,36 @@ object PluginBundle {
     }
 
     /** [install] with the files from anywhere (the unit tests). */
-    fun install(pluginDir: File, read: (String) -> ByteArray): String? = try {
-        if (!pluginDir.isDirectory && !pluginDir.mkdirs()) {
-            "cannot create ${pluginDir.path}"
-        } else {
+    fun install(pluginDir: File, read: (String) -> ByteArray): String? {
+        val tmps = ArrayList<File>()
+        return try {
+            if (!pluginDir.isDirectory && !pluginDir.mkdirs()) return "cannot create ${pluginDir.path}"
+            // all of it read, then all of it written beside the old files, and only then moved into
+            // place: when anything is missing or the storage is full, the old plugin stays whole
+            val data = FILES.associateWith { read(it) }
+            for ((name, bytes) in data) {
+                val tmp = File(pluginDir, "$name.bridge-tmp")
+                tmps.add(tmp)
+                tmp.writeBytes(bytes)
+                if (tmp.length() != bytes.size.toLong()) throw java.io.IOException("could not write all of $name")
+            }
             // main.js last: with the styles and manifest of the new build already in place
             for (name in FILES.reversed()) {
                 val tmp = File(pluginDir, "$name.bridge-tmp")
-                tmp.writeBytes(read(name))
                 val target = File(pluginDir, name)
                 if (!tmp.renameTo(target)) {
                     // some storage will not move over an existing file
                     target.delete()
-                    if (!tmp.renameTo(target)) {
-                        tmp.delete()
-                        throw java.io.IOException("cannot write ${target.path}")
-                    }
+                    if (!tmp.renameTo(target)) throw java.io.IOException("cannot write ${target.path}")
                 }
             }
             synchronized(installedCache) { installedCache.remove(File(pluginDir, "main.js").path) }
             null
+        } catch (e: Exception) {
+            e.message ?: e.javaClass.simpleName
+        } finally {
+            for (t in tmps) if (t.exists()) t.delete()
         }
-    } catch (e: Exception) {
-        e.message ?: e.javaClass.simpleName
     }
 
     // ------------------------------------------------------------------ keeping them matched
