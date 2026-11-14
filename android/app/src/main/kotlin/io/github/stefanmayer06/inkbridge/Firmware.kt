@@ -24,7 +24,9 @@ fun zoneOf(x: Float, y: Float, r: FirmwareRequest): InkGate.Zone = when {
 
 /**
  * What the firmware is asked to do: draw inside [limit] (the page, where ink stays) but not in
- * [exclude], with [pen]. [surface] is the ink view around the page (null from older plugins).
+ * [exclude], with [pen]. [surface] is the ink view around the page (null from older plugins), and
+ * [page] the page's part on screen as it is, before it was cut to the overlay (where the pen writes ink,
+ * whether the firmware can draw there or not).
  */
 data class FirmwareRequest(
     val limit: PxRect,
@@ -33,6 +35,7 @@ data class FirmwareRequest(
     val refreshMs: Int,
     val sideButton: Boolean,
     val surface: PxRect? = null,
+    val page: PxRect = limit,
 )
 
 /**
@@ -41,6 +44,35 @@ data class FirmwareRequest(
  */
 fun windowOffset(win: WindowGeom, dpr: Float, overlayLeft: Int, overlayTop: Int): kotlin.Pair<Float, Float> =
     kotlin.Pair(win.x * dpr - overlayLeft, win.y * dpr - overlayTop)
+
+/** The screen and its system bars, in device pixels (what the Bridge's own full-screen window is told). */
+data class ScreenBars(val w: Int, val h: Int, val statusTop: Int, val navBottom: Int, val navLeft: Int = 0, val navRight: Int = 0)
+
+/**
+ * Where Obsidian's window starts on the screen (device pixels), from its size alone – for when no
+ * event has said so. A full-screen app's window spans the screen, less the status bar or not, less the
+ * navigation bar or not: the one combination its size fits is where it is. When two fit (bars of the
+ * same height), the safe area says whether Obsidian draws under the status bar. Null when its size
+ * fits none (split screen, a floating window): then the place is not known this way.
+ */
+fun windowFromViewport(vp: ViewportGeom, dpr: Float, bars: ScreenBars): kotlin.Pair<Float, Float>? {
+    val w = vp.w * dpr
+    val h = vp.h * dpr
+    // the size is whole CSS pixels (innerWidth/innerHeight): up to a device pixel ratio off, and a little more
+    val tol = 2f * dpr + 2f
+    fun fitting(starts: List<Int>, ends: List<Int>, size: Float): List<Int> =
+        starts.distinct().flatMap { a -> ends.distinct().filter { b -> kotlin.math.abs((b - a) - size) <= tol }.map { a } }.distinct()
+    val lefts = fitting(listOf(0, bars.navLeft), listOf(bars.w, bars.w - bars.navRight), w)
+    val tops = fitting(listOf(0, bars.statusTop), listOf(bars.h, bars.h - bars.navBottom), h)
+    if (lefts.isEmpty() || tops.isEmpty()) return null
+    val left = lefts.min()
+    val top = when {
+        tops.size == 1 -> tops[0]
+        vp.top > 0f -> 0
+        else -> tops.max()
+    }
+    return kotlin.Pair(left.toFloat(), top.toFloat())
+}
 
 /**
  * The firmware request for the plugin's state, or null when the firmware should
@@ -58,5 +90,5 @@ fun firmwareRequest(state: BridgeState?, calibration: Calibration, overlayW: Int
         .map { PxRect(it[0], it[1], it[2], it[3]) }
         .filter { it.intersects(limit) }
     val surface = state.surface?.let { calibration.toPx(it, state.dpr, grow = true) }?.let { PxRect(it[0], it[1], it[2], it[3]) }
-    return FirmwareRequest(limit, exclude, state.pen, state.refreshMs, state.sideButtonErases, surface)
+    return FirmwareRequest(limit, exclude, state.pen, state.refreshMs, state.sideButtonErases, surface, PxRect(lim[0], lim[1], lim[2], lim[3]))
 }

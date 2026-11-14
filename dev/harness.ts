@@ -147,7 +147,7 @@ function attachFastInk(): FastInkBridge {
   const files = new Map<string, string>();
   const plugin = {
     settings: { fastInk: "on", fastInkRefreshMs: 800, sideButton: "eraser" },
-    manifest: { id: "ink-notebook", dir: ".obsidian/plugins/ink-notebook" },
+    manifest: { id: "ink-notebook", dir: ".obsidian/plugins/ink-notebook", version: "harness" },
     app: {
       vault: {
         configDir: ".obsidian",

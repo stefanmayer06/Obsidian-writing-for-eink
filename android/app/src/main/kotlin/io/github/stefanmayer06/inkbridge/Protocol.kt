@@ -27,6 +27,13 @@ data class CssRect(val x: Float, val y: Float, val w: Float, val h: Float) {
  */
 data class WindowGeom(val x: Float, val y: Float, val w: Float, val h: Float, val sw: Float, val sh: Float)
 
+/**
+ * Obsidian's window by its size (CSS pixels), always sent by newer plugins: its size, the screen's,
+ * and the safe area at its top (more than 0 when Obsidian draws under the status bar). With the
+ * screen's system bars this says where the window is when no event has said so ([windowFromViewport]).
+ */
+data class ViewportGeom(val w: Float, val h: Float, val sw: Float, val sh: Float, val top: Float)
+
 /** A pen-down as the plugin saw it (CSS pixels, wall clock ms), to calibrate the position. */
 data class PenDown(val x: Float, val y: Float, val t: Long)
 
@@ -63,6 +70,10 @@ data class BridgeState(
     val win: WindowGeom? = null,
     /** The presses (of [ui]) whose result this state includes (null: an older plugin, which does not say). */
     val uiDone: Long? = null,
+    /** Obsidian's window by its size (null: a plugin older than this Bridge). */
+    val vp: ViewportGeom? = null,
+    /** The plugin's version, when it says. */
+    val app: String? = null,
 ) {
     /** Every pen-down this message reports. */
     val allDowns: List<PenDown> get() = if (down == null || downs.any { it.t == down.t }) downs else downs + down
@@ -75,7 +86,8 @@ data class BridgeState(
 
     /** The same request for the screen (the page, what covers it, the pen, the window); lease, counters and pen-down aside. */
     fun sameScreen(o: BridgeState?): Boolean =
-        o != null && armed == o.armed && region == o.region && exclude == o.exclude && pen == o.pen && surface == o.surface && win == o.win
+        o != null && armed == o.armed && region == o.region && exclude == o.exclude && pen == o.pen && surface == o.surface && win == o.win &&
+            vp == o.vp
 
     companion object {
         const val VERSION = 1
@@ -137,6 +149,19 @@ data class BridgeState(
             return if (ok) w else null
         }
 
+        private fun viewportOf(o: JSONObject?): ViewportGeom? {
+            if (o == null) return null
+            val v = ViewportGeom(
+                o.optDouble("w", 0.0).toFloat(),
+                o.optDouble("h", 0.0).toFloat(),
+                o.optDouble("sw", 0.0).toFloat(),
+                o.optDouble("sh", 0.0).toFloat(),
+                o.optDouble("top", 0.0).toFloat(),
+            )
+            val ok = listOf(v.w, v.h, v.sw, v.sh, v.top).all { it.isFinite() } && v.w > 0f && v.h > 0f && v.w < 20_000 && v.h < 20_000
+            return if (ok) v else null
+        }
+
         private fun downOf(o: JSONObject?): PenDown? {
             if (o == null || !o.has("t")) return null
             val d = PenDown(o.optDouble("x").toFloat(), o.optDouble("y").toFloat(), o.optLong("t"))
@@ -187,6 +212,8 @@ data class BridgeState(
                     surface = rect(o.optJSONObject("surface"))?.takeIf { !it.isEmpty },
                     win = windowOf(o.optJSONObject("win")),
                     uiDone = if (o.has("uiDone")) o.optLong("uiDone", 0) else null,
+                    vp = viewportOf(o.optJSONObject("vp")),
+                    app = o.optString("app", "").takeIf { it.isNotBlank() }?.take(40),
                 )
             }
         } catch (e: Exception) {
@@ -240,5 +267,5 @@ data class BridgeState(
 
 /** The app version without depending on generated BuildConfig in unit tests. */
 object BuildConfigInfo {
-    const val VERSION_NAME = "0.10.0"
+    const val VERSION_NAME = "0.11.0"
 }

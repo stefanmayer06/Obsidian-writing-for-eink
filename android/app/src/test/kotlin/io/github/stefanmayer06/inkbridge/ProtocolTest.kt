@@ -74,6 +74,12 @@ class ProtocolTest {
         assertNull(old.win)
         assertNull(old.surface)
         assertNull(old.uiDone)
+        // the window by its size, and the plugin's version
+        val withSize = BridgeState.parse(message.replace("\"clear\":3,", "\"clear\":3,\"vp\":{\"w\":930,\"h\":1219,\"sw\":930,\"sh\":1240,\"top\":0},\"app\":\"2.4.0\","))!!
+        assertEquals(ViewportGeom(930f, 1219f, 930f, 1240f, 0f), withSize.vp)
+        assertEquals("2.4.0", withSize.app)
+        assertNull(old.vp)
+        assertNull(old.app)
         // a window position that is no number is dropped
         assertNull(BridgeState.parse(message.replace("\"clear\":3,", "\"clear\":3,\"win\":{\"x\":\"a\",\"y\":2},"))!!.win)
     }
@@ -177,6 +183,28 @@ class CalibrationTest {
         assertNotNull(c.checkedOff)
         // a missed stroke does not move it either
         assertFalse(c.distrustScale(2f))
+    }
+
+    @Test
+    fun placesFromObsidiansWindowSizeWhenNoEventSaysWhereItIs() {
+        // a 1860×2480 screen with a 42 px status bar and no navigation bar (Boox), ratio 2
+        val bars = ScreenBars(1860, 2480, statusTop = 42, navBottom = 0)
+        // below the status bar: 2438 px high
+        assertEquals(kotlin.Pair(0f, 42f), windowFromViewport(ViewportGeom(930f, 1219f, 930f, 1240f, 0f), 2f, bars))
+        // the whole screen (Obsidian draws under the status bar)
+        assertEquals(kotlin.Pair(0f, 0f), windowFromViewport(ViewportGeom(930f, 1240f, 930f, 1240f, 21f), 2f, bars))
+        // with a 62 px navigation bar: below the status bar and above it
+        val nav = ScreenBars(1860, 2480, statusTop = 42, navBottom = 62)
+        assertEquals(kotlin.Pair(0f, 42f), windowFromViewport(ViewportGeom(930f, 1188f, 930f, 1240f, 0f), 2f, nav))
+        // under the status bar, above the navigation bar
+        assertEquals(kotlin.Pair(0f, 0f), windowFromViewport(ViewportGeom(930f, 1209f, 930f, 1240f, 21f), 2f, nav))
+        // half the screen (split screen): not known this way
+        assertNull(windowFromViewport(ViewportGeom(930f, 600f, 930f, 1240f, 0f), 2f, bars))
+        assertNull(windowFromViewport(ViewportGeom(465f, 1219f, 930f, 1240f, 0f), 2f, bars))
+        // the bars of the same height: the safe area says whether it is under the status bar
+        val same = ScreenBars(1860, 2480, statusTop = 50, navBottom = 50)
+        assertEquals(kotlin.Pair(0f, 0f), windowFromViewport(ViewportGeom(930f, 1215f, 930f, 1240f, 25f), 2f, same))
+        assertEquals(kotlin.Pair(0f, 50f), windowFromViewport(ViewportGeom(930f, 1215f, 930f, 1240f, 0f), 2f, same))
     }
 
     @Test

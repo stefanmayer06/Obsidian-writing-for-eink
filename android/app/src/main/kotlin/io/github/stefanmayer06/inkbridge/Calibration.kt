@@ -52,6 +52,9 @@ class Calibration(private var guessX: Float = 0f, private var guessY: Float = 0f
     /** Placed from Obsidian's own report of where its window is ([placeFromWindow]); pen-downs only check it. */
     var fromWindow = false
         private set
+    /** What told where the window is: "events" (its pen and finger events) or "size" (its size and the screen's bars). */
+    var windowSource = ""
+        private set
     /** A constant shift the firmware's pen-downs showed against Obsidian's report (kept per screen size). */
     var correctionX = 0f
         private set
@@ -86,9 +89,10 @@ class Calibration(private var guessX: Float = 0f, private var guessY: Float = 0f
      * pixels) plus a shift the firmware's pen-downs showed before, and the scale is the device pixel
      * ratio. True when the placement changed.
      */
-    fun placeFromWindow(baseX: Float, baseY: Float): Boolean {
+    fun placeFromWindow(baseX: Float, baseY: Float, source: String = "events"): Boolean {
         val x = baseX + correctionX
         val y = baseY + correctionY
+        windowSource = source
         val changed = !fromWindow || abs(x - offsetX) > 0.25f || abs(y - offsetY) > 0.25f || scaleX != null || scaleY != null
         if (!fromWindow) {
             checks.clear()

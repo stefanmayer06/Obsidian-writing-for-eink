@@ -46,6 +46,19 @@ export interface FastInkWindow {
   sh: number;
 }
 
+/**
+ * Obsidian's window by its size (CSS pixels), sent always: its size, the screen's, and the safe area at
+ * its top (more than 0 when Obsidian draws under the status bar). With the screen's system bars, which
+ * the Bridge knows, this says where the window is even when no event has said so.
+ */
+export interface FastInkViewport {
+  w: number;
+  h: number;
+  sw: number;
+  sh: number;
+  top: number;
+}
+
 export interface FastInkMessage {
   v: 1;
   type: "state";
@@ -61,8 +74,12 @@ export interface FastInkMessage {
   page?: CssRect;
   /** The ink view around the page: the pen hovering here is not away from the page (the firmware keeps drawing). */
   surface?: CssRect;
-  /** Where Obsidian's window is on the screen (once an event has shown it). */
+  /** Where Obsidian's window is on the screen (once events have shown it). */
   win?: FastInkWindow;
+  /** Obsidian's window by its size (always). */
+  vp?: FastInkViewport;
+  /** This plugin's version. */
+  app?: string;
   pen: FastInkPen;
   refreshMs: number;
   sideButtonErases: boolean;
@@ -126,6 +143,7 @@ export interface FastInkInputs {
   page?: CssRect | null;
   surface?: CssRect | null;
   win?: FastInkWindow | null;
+  vp?: FastInkViewport | null;
   pen: FastInkPen | null;
   dpr: number;
   refreshMs: number;
@@ -224,6 +242,7 @@ export function buildMessage(
     clear: number;
     ui?: number;
     uiDone?: number;
+    app?: string;
     down?: { x: number; y: number; t: number } | null;
     downs?: ReadonlyArray<{ x: number; y: number; t: number }>;
   },
@@ -253,6 +272,11 @@ export function buildMessage(
     const w = inputs.win;
     msg.win = { x: round1(w.x), y: round1(w.y), w: round1(w.w), h: round1(w.h), sw: round1(w.sw), sh: round1(w.sh) };
   }
+  if (inputs.vp) {
+    const v = inputs.vp;
+    msg.vp = { w: round1(v.w), h: round1(v.h), sw: round1(v.sw), sh: round1(v.sh), top: round1(v.top) };
+  }
+  if (opts.app) msg.app = opts.app;
   if (opts.down) msg.down = { x: round1(opts.down.x), y: round1(opts.down.y), t: Math.round(opts.down.t) };
   if (opts.downs?.length) msg.downs = opts.downs.map((d) => ({ x: round1(d.x), y: round1(d.y), t: Math.round(d.t) }));
   return msg;
@@ -268,37 +292,61 @@ export function sameRequest(a: FastInkMessage | null, b: FastInkMessage | null):
 /**
  * Where Obsidian's window is on the screen, from pointer events.
  *
- * On Android every touch and pen event carries the position on the screen as well as in the window
+ * On Android every touch and pen event carries its position on the screen as well as in the window
  * (Chromium fills `screenX/Y` from the raw screen position), so `screen − client` is where the window
- * starts, in CSS pixels – the status bar, a split screen, whatever. It is the same for every event;
- * the median of the last few is kept, and changed only by a real move (more than a pixel), so the
- * Bridge is not told about rounding noise.
+ * starts, in CSS pixels – the status bar, a split screen, whatever. That is trusted only once events
+ * spread over the window agree on it: some WebViews count the screen position in device pixels (it is
+ * then divided by the device pixel ratio first), and one that fits neither is not used at all (the
+ * Bridge then goes by the window's size). The value changes only by a real move (more than a pixel), so
+ * the Bridge is not told about rounding noise.
  */
 export class WindowOrigin {
-  private xs: number[] = [];
-  private ys: number[] = [];
+  private samples: Array<{ cx: number; cy: number; sx: number; sy: number }> = [];
   value: { x: number; y: number } | null = null;
 
   /** An event at (clientX, clientY) in the window and (screenX, screenY) on the screen. True when the value changed. */
-  add(clientX: number, clientY: number, screenX: number, screenY: number): boolean {
-    const dx = screenX - clientX;
-    const dy = screenY - clientY;
+  add(clientX: number, clientY: number, screenX: number, screenY: number, dpr = 1): boolean {
     if (![clientX, clientY, screenX, screenY].every(Number.isFinite)) return false;
-    // no screen position at all (made-up events)
+    // no screen position at all (made-up events, or a WebView that leaves it out)
     if (screenX === 0 && screenY === 0 && (clientX !== 0 || clientY !== 0)) return false;
     // a window far off any screen: not a real screen position
-    if (Math.abs(dx) > 20_000 || Math.abs(dy) > 20_000) return false;
-    this.xs = [...this.xs, dx].slice(-WINDOW_SAMPLES);
-    this.ys = [...this.ys, dy].slice(-WINDOW_SAMPLES);
-    const x = median(this.xs);
-    const y = median(this.ys);
+    if (Math.abs(screenX - clientX) > 20_000 || Math.abs(screenY - clientY) > 20_000) return false;
+    this.samples = [...this.samples, { cx: clientX, cy: clientY, sx: screenX, sy: screenY }].slice(-WINDOW_SAMPLES);
+    const unit = screenUnit(this.samples, dpr);
     const v = this.value;
+    if (unit === null) {
+      this.value = null;
+      return v !== null;
+    }
+    const x = median(this.samples.map((p) => p.sx / unit - p.cx));
+    const y = median(this.samples.map((p) => p.sy / unit - p.cy));
     if (v && Math.abs(x - v.x) <= WINDOW_SLOP && Math.abs(y - v.y) <= WINDOW_SLOP) return false;
     this.value = { x: round1(x), y: round1(y) };
     return true;
   }
 }
 
+/**
+ * How the screen positions are counted: 1 (CSS pixels, the standard) or the device pixel ratio – the one
+ * for which events spread over the window all give the same window position; null when neither fits.
+ * Events close together cannot tell: the standard holds until they spread.
+ */
+function screenUnit(samples: ReadonlyArray<{ cx: number; cy: number; sx: number; sy: number }>, dpr: number): number | null {
+  const spread = (vals: number[]) => Math.max(...vals) - Math.min(...vals);
+  const spreadX = spread(samples.map((p) => p.cx));
+  const spreadY = spread(samples.map((p) => p.cy));
+  if (spreadX < UNIT_SPREAD && spreadY < UNIT_SPREAD) return 1;
+  const fits = (u: number) =>
+    (spreadX < UNIT_SPREAD || spread(samples.map((p) => p.sx / u - p.cx)) <= UNIT_AGREE) &&
+    (spreadY < UNIT_SPREAD || spread(samples.map((p) => p.sy / u - p.cy)) <= UNIT_AGREE);
+  if (fits(1)) return 1;
+  if (dpr > 1.05 && fits(dpr)) return dpr;
+  return null;
+}
+
+/** CSS pixels events must be spread over to tell how screen positions are counted, and how close their window positions must be then. */
+const UNIT_SPREAD = 100;
+const UNIT_AGREE = 3;
 const WINDOW_SAMPLES = 9;
 /** CSS pixels the window must move before the Bridge is told (rounded screen positions jitter by under one). */
 const WINDOW_SLOP = 1;

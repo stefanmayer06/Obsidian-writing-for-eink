@@ -17,8 +17,11 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.graphics.Point
 import android.view.Gravity
 import android.view.SurfaceView
+import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import com.onyx.android.sdk.data.note.TouchPoint
 import com.onyx.android.sdk.pen.RawInputCallback
@@ -81,6 +84,8 @@ class BridgeService : Service() {
     /** Where the overlay starts on the screen (Obsidian's window position is reported on the screen). */
     private var overlayLeft = 0
     private var overlayTop = 0
+    /** The screen and its system bars (to tell where Obsidian's window is from its size). */
+    private var bars: ScreenBars? = null
     private var file: ControlFile? = null
     private var socket: ControlSocket? = null
     private var transport = "none"
@@ -134,6 +139,8 @@ class BridgeService : Service() {
     val isTesting: Boolean get() = testUntil > System.currentTimeMillis()
     val testName: String get() = testNameOf(testFeature)
     val isCalibrated: Boolean get() = calibration.calibrated
+    /** The plugin's version, when it says (newer ones do). */
+    val pluginVersion: String? get() = state?.app
     val transportName: String get() = transport
     val lastError: String? get() = error
     val bridgeDirs get() = file?.bridgeDirs ?: emptyList()
@@ -200,14 +207,23 @@ class BridgeService : Service() {
         v.setZOrderOnTop(true)
         v.holder.setFormat(PixelFormat.TRANSPARENT)
         // the same window as Boox Rapid Draw's
+        // the whole screen, system bars included: laid out clear of them (Android's default for a
+        // window), the overlay missed a strip of the screen where the firmware then could not draw – and
+        // Obsidian's page can reach there
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSPARENT,
         )
         lp.gravity = Gravity.TOP or Gravity.START
+        lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        if (Build.VERSION.SDK_INT >= 30) {
+            lp.fitInsetsTypes = 0
+            lp.fitInsetsSides = 0
+        }
         // Android 12+ passes touches through another app's window only below 0.8 opacity
         lp.alpha = 0.2f
         wm.addView(v, lp)
@@ -218,6 +234,10 @@ class BridgeService : Service() {
             error = "Onyx pen SDK not available: ${e.javaClass.simpleName}"
             null
         }
+        v.setOnApplyWindowInsetsListener { view, insets ->
+            readBars(view, insets)
+            insets
+        }
         v.addOnLayoutChangeListener { view, l, t, r, b, _, _, _, _ ->
             val w = r - l
             val h = b - t
@@ -226,12 +246,13 @@ class BridgeService : Service() {
             val moved = loc[0] != overlayLeft || loc[1] != overlayTop
             overlayLeft = loc[0]
             overlayTop = loc[1]
+            view.rootWindowInsets?.let { readBars(view, it) }
             if (w > 0 && h > 0 && (w != overlayW || h != overlayH)) {
                 overlayW = w
                 overlayH = h
                 onOverlayResized()
             } else if (moved) {
-                state?.win?.let { placeFromWindow(it, state!!.dpr) }
+                state?.let { place(it) }
                 applyNow()
             }
         }
@@ -249,7 +270,7 @@ class BridgeService : Service() {
             if (it.size >= 2 && it[0] != null && it[1] != null) calibration.restoreCorrection(it[0]!!, it[1]!!)
         }
         // the plugin said where its window is: placed from that at once (no strokes needed)
-        state?.win?.let { placeFromWindow(it, state!!.dpr) }
+        state?.let { place(it) }
         openRaw()
         applyNow()
         report()
@@ -258,7 +279,48 @@ class BridgeService : Service() {
     /** Obsidian reported where its window is on the screen: the page is placed from that, exactly. */
     private fun placeFromWindow(win: WindowGeom, dpr: Float) {
         val (x, y) = windowOffset(win, dpr, overlayLeft, overlayTop)
-        if (calibration.placeFromWindow(x, y)) applied = null
+        if (calibration.placeFromWindow(x, y, "events")) applied = null
+    }
+
+    /**
+     * Where Obsidian's window is: from its events when it reports that, else from its size and the
+     * screen's bars; only a plugin that says neither (older than this Bridge) leaves it to be measured
+     * from strokes.
+     */
+    private fun place(s: BridgeState) {
+        val win = s.win
+        if (win != null) return placeFromWindow(win, s.dpr)
+        val vp = s.vp ?: return
+        val b = bars ?: return
+        val (x, y) = windowFromViewport(vp, s.dpr, b) ?: return
+        if (calibration.placeFromWindow(x - overlayLeft, y - overlayTop, "size")) applied = null
+    }
+
+    /** The screen's size and system bars, as Android tells the overlay (which spans the whole screen). */
+    private fun readBars(view: View, insets: WindowInsets) {
+        val size = Point()
+        if (Build.VERSION.SDK_INT >= 30) {
+            val b = wm.maximumWindowMetrics.bounds
+            size.set(b.width(), b.height())
+        } else {
+            @Suppress("DEPRECATION")
+            wm.defaultDisplay.getRealSize(size)
+        }
+        val next = if (Build.VERSION.SDK_INT >= 30) {
+            val st = insets.getInsetsIgnoringVisibility(WindowInsets.Type.statusBars())
+            val nav = insets.getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars())
+            val shown = insets.isVisible(WindowInsets.Type.navigationBars())
+            ScreenBars(size.x, size.y, st.top, if (shown) nav.bottom else 0, if (shown) nav.left else 0, if (shown) nav.right else 0)
+        } else {
+            @Suppress("DEPRECATION")
+            ScreenBars(size.x, size.y, insets.stableInsetTop, insets.stableInsetBottom, insets.stableInsetLeft, insets.stableInsetRight)
+        }
+        if (next == bars) return
+        bars = next
+        state?.let { st ->
+            place(st)
+            applyNow()
+        }
     }
 
     /** Where Obsidian's window probably starts in the overlay: below the status bar. */
@@ -304,7 +366,7 @@ class BridgeService : Service() {
         state = s
         file?.active = s.leased(lastMessageAt)
         // where Obsidian's window is: the page is placed from it (no measuring)
-        s.win?.let { placeFromWindow(it, s.dpr) }
+        place(s)
         // what the gate waited for (a state sent after a toolbar visit, or the result of a press), then
         // what this one changes
         gate.stateSent(s.at, s.uiDone)
@@ -319,8 +381,9 @@ class BridgeService : Service() {
             if (!strokes.pluginDown(d)) continue
             // only a stroke while the firmware was drawing must have a pen-down of the firmware's – and,
             // with the page placed from Obsidian's window, only one that began on the page: off the page
-            // (the grey around it, where no ink stays) the firmware does not draw, by design
-            if (!wasDrawingAt(d.t) || (placed != null && !placedInside(d, s.dpr, placed, ON_PAGE_MARGIN_PX))) strokes.forget(d)
+            // (the grey around it, where no ink stays) the firmware does not draw, by design. On the page
+            // but where the firmware cannot draw (past the overlay) it counts: the firmware pauses for it.
+            if (!wasDrawingAt(d.t) || (placed != null && !onPage(d, s.dpr, placed))) strokes.forget(d)
             if (calibration.match(d, s.dpr)) {
                 saveCalibration()
                 applied = null
@@ -363,6 +426,14 @@ class BridgeService : Service() {
             report(force = true)
         }
         strokes.nextCheckAt()?.let { main.postDelayed(strokeCheck, maxOf(10L, it - now)) }
+    }
+
+    /** By the current placement, the pen-down is on the page (where ink stays) and not under something left out. */
+    private fun onPage(d: PenDown, dpr: Float, r: FirmwareRequest): Boolean {
+        val (x, y) = calibration.pointToPx(d.x, d.y, dpr)
+        val m = ON_PAGE_MARGIN_PX
+        val p = r.page
+        return x >= p.l + m && x < p.r - m && y >= p.t + m && y < p.b - m && r.exclude.none { it.contains(x, y, m) }
     }
 
     /** By the current placement, the pen-down is at least [m] pixels inside the firmware's drawing area. */
@@ -648,7 +719,8 @@ class BridgeService : Service() {
                 val dpr = state?.dpr ?: 1f
                 ", page %.0f×%.0f px".format(p.w * dpr, p.h * dpr)
             } ?: ""
-            return "x ${a.limit.l}–${a.limit.r}, y ${a.limit.t}–${a.limit.b} of ${overlayW}×$overlayH$page, " +
+            val screen = bars?.let { b -> if (b.w != overlayW || b.h != overlayH) " (screen ${b.w}×${b.h})" else "" } ?: ""
+            return "x ${a.limit.l}–${a.limit.r}, y ${a.limit.t}–${a.limit.b} of ${overlayW}×$overlayH$screen$page, " +
                 "${a.exclude.size} part(s) left out, offset %.0f, %.0f".format(c.offsetX, c.offsetY) + scale
         }
 
@@ -657,7 +729,19 @@ class BridgeService : Service() {
         get() {
             val c = calibration
             val w = state?.win
+            val s = state
             return when {
+                c.fromWindow && c.windowSource == "size" && s?.vp != null -> {
+                    val vp = s.vp
+                    val sb = StringBuilder(
+                        "from Obsidian's window size (%.0f×%.0f px, starting %.0f px down the screen)".format(vp.w * s.dpr, vp.h * s.dpr, c.offsetY - c.correctionY + overlayTop),
+                    )
+                    if (c.correctionX != 0f || c.correctionY != 0f) {
+                        sb.append(", shifted by %.0f, %.0f px to where the firmware's pen-downs are".format(c.correctionX, c.correctionY))
+                    }
+                    c.checkedOff?.let { (x, y) -> sb.append("; the firmware's pen-downs are %.0f, %.0f px from it".format(x, y)) }
+                    sb.toString()
+                }
                 c.fromWindow && w != null -> {
                     val dpr = state?.dpr ?: 1f
                     val sb = StringBuilder("from Obsidian's window (at %.0f, %.0f on the screen, %.0f×%.0f px)".format(w.x * dpr, w.y * dpr, w.w * dpr, w.h * dpr))
@@ -667,7 +751,11 @@ class BridgeService : Service() {
                     c.checkedOff?.let { (x, y) -> sb.append("; the firmware's pen-downs are %.0f, %.0f px from it".format(x, y)) }
                     sb.toString()
                 }
-                c.calibrated -> "measured from strokes (this Ink Notebook does not say where its window is)"
+                s != null && s.vp == null && c.calibrated ->
+                    "measured from strokes: this Ink Notebook is older than the Bridge and does not say where its window is – update Ink Notebook"
+                s != null && s.vp == null -> "estimated (below the status bar): this Ink Notebook is older than the Bridge – update Ink Notebook"
+                c.fromWindow -> "from Obsidian's window, as it last said (its events disagree just now: has the window moved?)"
+                c.calibrated -> "measured from strokes: Obsidian's window fits no full-screen layout (split screen?)"
                 else -> "estimated (below the status bar) until Obsidian says where its window is"
             }
         }

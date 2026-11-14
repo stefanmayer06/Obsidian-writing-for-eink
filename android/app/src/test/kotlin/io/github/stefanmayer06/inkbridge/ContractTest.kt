@@ -41,6 +41,8 @@ class ContractTest {
         assertEquals(CssRect(0f, 56.4f, 620f, 877.3f), s.page)
         assertEquals(CssRect(0f, 56f, 620f, 801f), s.surface)
         assertEquals(WindowGeom(0f, 24f, 620f, 956.4f, 620f, 980.4f), s.win)
+        assertEquals(ViewportGeom(620f, 956.4f, 620f, 980.4f, 0f), s.vp)
+        assertEquals("9.9.9-test", s.app)
         // placed from the window: 24 CSS px down is 48 px, nothing measured
         val (x, y) = windowOffset(s.win!!, s.dpr, 0, 0)
         val w = Calibration(0f, 40f).apply { placeFromWindow(x, y) }
