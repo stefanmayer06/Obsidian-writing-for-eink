@@ -111,6 +111,8 @@ export interface FastInkStatus {
   area?: string;
   /** How the Bridge placed the page on screen, in its words ("from Obsidian's window", "measured from strokes"). */
   placement?: string;
+  /** Strokes during which the firmware stayed off because the pen was already down when it was to draw again. */
+  lateSwitchOns?: number;
 }
 
 /** What the page looks like right now, measured by the view. */
@@ -349,6 +351,7 @@ export function parseStatus(text: string): FastInkStatus | null {
       lastMissed: point(r.lastMissed),
       area: typeof r.area === "string" ? r.area : undefined,
       placement: typeof r.placement === "string" ? r.placement : undefined,
+      lateSwitchOns: typeof r.lateSwitchOns === "number" ? r.lateSwitchOns : undefined,
     };
   } catch {
     return null;

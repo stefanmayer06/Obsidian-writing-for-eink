@@ -17,8 +17,13 @@ import kotlin.math.abs
 class StrokeCheck(
     /** The firmware's and the plugin's pen-down of the same press are this close in time (same clock, different paths). */
     private val windowMs: Long = 250,
-    /** How long after the plugin's pen-down the firmware's may still come in (its report waits for the main thread). */
-    private val waitMs: Long = 150,
+    /**
+     * How long after the plugin's pen-down the firmware's may still come in. The firmware's pen reader
+     * reports on its own thread the moment the pen touches; only the hop to the main thread is left,
+     * while the plugin's message takes longer than that to arrive (the control file). So it is short:
+     * a stroke the firmware does not draw shows as Obsidian draws it almost at once.
+     */
+    private val waitMs: Long = 60,
 ) {
     private val firmware = ArrayDeque<Long>()
     private val pending = ArrayDeque<PenDown>()

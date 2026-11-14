@@ -13,7 +13,7 @@ class StrokeCheckTest {
         val c = StrokeCheck()
         c.firmwareDown(1000)
         assertTrue(c.pluginDown(PenDown(10f, 20f, 1020)))
-        assertTrue(c.check(1060).isEmpty())
+        assertTrue(c.check(1100).isEmpty())
         assertNull(c.nextCheckAt())
         assertEquals(0, c.missed)
     }
@@ -22,10 +22,10 @@ class StrokeCheckTest {
     fun aStrokeTheFirmwareDidNotDrawIsFoundAMomentLater() {
         val c = StrokeCheck()
         c.pluginDown(PenDown(500f, 90f, 1000))
-        // the firmware's report may still be on its way
-        assertTrue(c.check(1060).isEmpty())
-        assertEquals(1150L, c.nextCheckAt())
-        val missed = c.check(1150)
+        // the firmware's report may still be on its way (a moment: it is sent the instant the pen touches)
+        assertTrue(c.check(1030).isEmpty())
+        assertEquals(1060L, c.nextCheckAt())
+        val missed = c.check(1060)
         assertEquals(listOf(PenDown(500f, 90f, 1000)), missed)
         assertEquals(1, c.missed)
         assertEquals(PenDown(500f, 90f, 1000), c.lastMissed)

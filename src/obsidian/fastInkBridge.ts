@@ -106,6 +106,12 @@ function shown(el: Element): boolean {
   return Array.from(el.getClientRects()).some((r) => r.width > 0 && r.height > 0);
 }
 
+/** `el` is what a press in the middle of `r` would reach (nothing lies over it there). */
+function onTop(doc: Document, el: Element, r: CssRect): boolean {
+  const hit = doc.elementFromPoint(r.x + r.w / 2, r.y + r.h / 2);
+  return !hit || el.contains(hit);
+}
+
 function isEditable(el: Element | null): boolean {
   if (!el) return false;
   if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return true;
@@ -145,7 +151,17 @@ export function measureInkPage(
     // only what is really there: a card or tooltip fading out, or kept invisible, takes no ink away
     const style = win.getComputedStyle(el);
     if (style.visibility === "hidden" || Number(style.opacity) === 0) return;
-    for (const r of Array.from(el.getClientRects())) if (r.width > 0 && r.height > 0) exclude.push(rectOf(r));
+    // and only what takes presses there: the pen writes through a tooltip (it takes no presses) or
+    // a card behind the page, so the firmware has to draw there too – a part left out where the pen
+    // writes is a stroke nobody shows until the next pause
+    if (style.pointerEvents === "none") return;
+    for (const r of Array.from(el.getClientRects())) {
+      if (!(r.width > 0 && r.height > 0)) continue;
+      const rect = rectOf(r);
+      const over = region ? intersect(rect, region) : null;
+      if (over && !onTop(doc, el, over)) continue;
+      exclude.push(rect);
+    }
   });
   const t = surface.tools;
   const pen = t.tool === "pen" ? fastInkPen(t.pen, t.widths[t.pen], t.color, surface.view.scale, dpr) : null;
@@ -375,6 +391,18 @@ export class FastInkBridge {
     const d = { x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, t };
     this.downs = [...this.recentDowns(now), d].slice(-RECENT_DOWNS);
     this.transmit(this.renewal(sent, now, { down: d, downs: this.downs }));
+    // the pen wrote on the page where the Bridge was told something covers it: that was wrong (the
+    // press reached the page), so the page is measured again once the stroke is done
+    if (sent.exclude.some((r) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h)) this.updateAfterStroke();
+  }
+
+  /** Measure the page again once the pen no longer writes (nothing is measured mid-stroke). */
+  private updateAfterStroke(tries = 25): void {
+    window.setTimeout(() => {
+      if (this.destroyed) return;
+      if (this.activeView()?.surface?.input.busy && tries > 0) return this.updateAfterStroke(tries - 1);
+      this.update();
+    }, 200);
   }
 
   /** The last message again with a new lease, the counters as they are now, and these pen-downs. */
