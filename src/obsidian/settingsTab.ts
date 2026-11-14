@@ -90,7 +90,8 @@ export class InkSettingTab extends PluginSettingTab {
         const s = b.status;
         const via = b.transport === "socket" ? "direct connection" : "control file";
         let text = `Connected to the Bridge app${s?.app ? ` ${s.app}` : ""} (${via}).`;
-        if (s && !s.calibrated) text += " The position on screen is measured from your first strokes.";
+        if (s?.placement) text += ` Page position on screen: ${s.placement}.`;
+        else if (s && !s.calibrated) text += " The position on screen is measured from your first strokes.";
         if (s?.penStrokes !== undefined) text += ` The firmware's pen reader has reported ${s.penHovers ?? 0} hover(s) and ${s.penStrokes} stroke(s) to the Bridge.`;
         if (s?.armed && s.paused) text += ` Instant ink pauses while the pen is away from the page (now: ${s.paused}).`;
         if (s?.missed) {

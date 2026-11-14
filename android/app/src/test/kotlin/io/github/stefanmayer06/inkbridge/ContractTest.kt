@@ -36,6 +36,17 @@ class ContractTest {
         val c = Calibration(0f, 40f)
         assertArrayEquals(intArrayOf(0, 154, 1240, 1752), c.toPx(s.region!!, s.dpr, grow = false))
         assertArrayEquals(intArrayOf(796, 176, 1206, 784), c.toPx(s.exclude[0], s.dpr, grow = true))
+        // where the page, the ink view and Obsidian's window are, and the presses the message includes
+        assertEquals(1L, s.uiDone)
+        assertEquals(CssRect(0f, 56.4f, 620f, 877.3f), s.page)
+        assertEquals(CssRect(0f, 56f, 620f, 801f), s.surface)
+        assertEquals(WindowGeom(0f, 24f, 620f, 956.4f, 620f, 980.4f), s.win)
+        // placed from the window: 24 CSS px down is 48 px, nothing measured
+        val (x, y) = windowOffset(s.win!!, s.dpr, 0, 0)
+        val w = Calibration(0f, 40f).apply { placeFromWindow(x, y) }
+        assertArrayEquals(intArrayOf(0, 162, 1240, 1760), w.toPx(s.region!!, s.dpr, grow = false))
+        val r = firmwareRequest(s, w, 1240, 2000, 4000)!!
+        assertEquals(PxRect(-4, 156, 1244, 1766), r.surface)
     }
 }
 

@@ -111,8 +111,8 @@ export interface SurfaceHost {
   notice?(message: string): void;
   /** The page was drawn again: zoom, scroll, size or page may have changed. */
   viewChanged?(): void;
-  /** The pen touched the page (screen position in CSS pixels). */
-  penDown?(clientX: number, clientY: number): void;
+  /** The pen touched the page (screen position in CSS pixels, and the event's time on the performance clock). */
+  penDown?(clientX: number, clientY: number, timeStamp?: number): void;
   /** The last pen stroke was not ink after all (a link tap, a snapped shape, scribble erasing). */
   inkDiscarded?(): void;
   /**

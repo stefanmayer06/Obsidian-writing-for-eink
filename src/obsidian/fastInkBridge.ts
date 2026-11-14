@@ -2,14 +2,18 @@ import { CapacitorAdapter, Platform } from "obsidian";
 import type InkNotebookPlugin from "../main";
 import {
   buildMessage,
+  eventWallTime,
   fastInkPen,
+  intersect,
   isArmed,
   parseStatus,
   sameRequest,
+  WindowOrigin,
   type CssRect,
   type FastInkInputs,
   type FastInkMessage,
   type FastInkStatus,
+  type FastInkWindow,
 } from "../core/fastInk";
 import type { InkSurface } from "../ink/surface";
 import { currentDevice } from "./einkMode";
@@ -24,6 +28,11 @@ import { currentDevice } from "./einkMode";
  * the Bridge told where the page is, which parts its toolbars and cards cover,
  * which pen is selected, and until when (a lease renewed while the page is open,
  * so the Bridge stops by itself when Obsidian goes away).
+ *
+ * "Where the page is" is given exactly, nothing is left for the Bridge to guess:
+ * the part of the page that takes ink (the paper, not the grey around it), the ink
+ * view around it, and where Obsidian's window is on the screen (every pen and
+ * finger event carries its screen position as well as its window position).
  *
  * Two ways to the Bridge: a WebSocket on 127.0.0.1 (instant, when Obsidian's
  * WebView allows it), else a small file in this plugin's folder that the Bridge
@@ -66,6 +75,14 @@ const PALM_MS = 700;
 /** Pen-downs this recent go with every message (the control file keeps only the latest message). */
 const RECENT_DOWNS_MS = 1500;
 const RECENT_DOWNS = 4;
+/**
+ * A press on a toolbar or card is "done" (its result is in the next message, which tells the Bridge
+ * the firmware may draw again) right after its click, or this long after the pen or finger lifted
+ * when no click follows (a drag, a long press).
+ */
+const PRESS_DONE_MS = 250;
+/** Moves of the pen or a finger are looked at for the window's position at most this often (presses always). */
+const LOCATE_EVERY_MS = 100;
 
 const NO_INPUTS: FastInkInputs = { ready: false, region: null, exclude: [], pen: null, dpr: 1, refreshMs: 800, sideButtonErases: true };
 
@@ -95,13 +112,34 @@ function isEditable(el: Element | null): boolean {
   return el instanceof HTMLElement && el.isContentEditable;
 }
 
-/** What the ink page looks like now, for the Bridge. */
-export function measureInkPage(surface: InkSurface, opts: { refreshMs: number; sideButtonErases: boolean }): FastInkInputs {
+/** Where the page is in the window (CSS pixels): all of it, also what lies past the ink view when zoomed in. */
+export function pageRect(surface: InkSurface, box: DOMRect): CssRect | null {
+  const p = surface.page;
+  const v = surface.view;
+  const r = { x: box.left + v.ox, y: box.top + v.oy, w: p.w * v.scale, h: p.h * v.scale };
+  return r.w > 0 && r.h > 0 && [r.x, r.y, r.w, r.h].every(Number.isFinite) ? r : null;
+}
+
+/**
+ * What the ink page looks like now, for the Bridge. The firmware draws on the page only – the paper,
+ * where ink stays (Ink Notebook draws nothing past the page's edge) – and `screen` is where Obsidian's
+ * window is on the screen, when known.
+ */
+export function measureInkPage(
+  surface: InkSurface,
+  opts: { refreshMs: number; sideButtonErases: boolean; screen?: { x: number; y: number } | null },
+): FastInkInputs {
   const doc = surface.el.ownerDocument;
   const win = doc.defaultView ?? window;
   const dpr = win.devicePixelRatio || 1;
   const box = surface.el.getBoundingClientRect();
-  const region = box.width > 0 && box.height > 0 ? rectOf(box) : null;
+  const view = box.width > 0 && box.height > 0 ? rectOf(box) : null;
+  const page = view ? pageRect(surface, box) : null;
+  const region = view && page ? intersect(page, view) : null;
+  const screen = opts.screen;
+  const windowOnScreen: FastInkWindow | null = screen
+    ? { x: screen.x, y: screen.y, w: win.innerWidth, h: win.innerHeight, sw: win.screen?.width ?? 0, sh: win.screen?.height ?? 0 }
+    : null;
   const exclude: CssRect[] = [];
   doc.querySelectorAll<HTMLElement>(UI_SELECTOR).forEach((el) => {
     // only what is really there: a card or tooltip fading out, or kept invisible, takes no ink away
@@ -112,7 +150,8 @@ export function measureInkPage(surface: InkSurface, opts: { refreshMs: number; s
   const t = surface.tools;
   const pen = t.tool === "pen" ? fastInkPen(t.pen, t.widths[t.pen], t.color, surface.view.scale, dpr) : null;
   let reason: string | null = null;
-  if (!region) reason = "the page is not on screen";
+  if (!view) reason = "the ink view is not on screen";
+  else if (!region) reason = "the page is not on screen (scrolled away)";
   else if (doc.visibilityState !== "visible") reason = "Obsidian is in the background";
   else if (!pen) reason = t.tool === "pen" ? "this pen has no instant ink" : `the ${t.tool} tool is selected (instant ink is for the pens)`;
   if (!reason) {
@@ -151,7 +190,19 @@ export function measureInkPage(surface: InkSurface, opts: { refreshMs: number; s
       reason ??= "things cover much of the page";
     }
   }
-  return { ready, region, exclude, pen, dpr, refreshMs: opts.refreshMs, sideButtonErases: opts.sideButtonErases, reason };
+  return {
+    ready,
+    region,
+    exclude,
+    page,
+    surface: view,
+    win: windowOnScreen,
+    pen,
+    dpr,
+    refreshMs: opts.refreshMs,
+    sideButtonErases: opts.sideButtonErases,
+    reason,
+  };
 }
 
 export class FastInkBridge {
@@ -182,6 +233,12 @@ export class FastInkBridge {
   private refreshAt = 0;
   /** Presses on anything but the page (the Bridge pauses the firmware for each, see FastInkMessage.ui). */
   private uiCount = 0;
+  /** The presses whose result has been sent (FastInkMessage.uiDone). */
+  private uiDone = 0;
+  private pressTimer: number | null = null;
+  /** Where Obsidian's window is on the screen, from the pen's and fingers' events. */
+  private readonly origin = new WindowOrigin();
+  private lastLocateAt = Number.NEGATIVE_INFINITY;
   /** When the pen last moved over Obsidian, writing or hovering (performance.now()). */
   private lastPenAt = Number.NEGATIVE_INFINITY;
   private destroyed = false;
@@ -249,15 +306,28 @@ export class FastInkBridge {
     p.registerDomEvent(document, "focusout", () => this.update());
     p.registerDomEvent(window, "resize", () => this.update());
     // a press on a toolbar, a card or Obsidian: the firmware pauses before the press changes anything
-    p.registerDomEvent(document, "pointerdown", (e) => this.pressed(e), { capture: true, passive: true });
+    p.registerDomEvent(
+      document,
+      "pointerdown",
+      (e) => {
+        this.locate(e, true);
+        this.pressed(e);
+      },
+      { capture: true, passive: true },
+    );
     p.registerDomEvent(
       document,
       "pointermove",
       (e) => {
         if (e.pointerType === "pen") this.lastPenAt = performance.now();
+        this.locate(e, false);
       },
       { capture: true, passive: true },
     );
+    // the press is over: its result goes to the Bridge (right after its click, which changes the tool)
+    p.registerDomEvent(document, "pointerup", () => this.pressDoneIn(PRESS_DONE_MS), { capture: true, passive: true });
+    p.registerDomEvent(document, "pointercancel", () => this.pressDoneIn(PRESS_DONE_MS), { capture: true, passive: true });
+    p.registerDomEvent(document, "click", () => this.pressClicked(), { capture: true, passive: true });
     // Obsidian's menus, modals and notices come and go as children of <body>
     this.observer = new MutationObserver(() => this.update());
     this.observer.observe(document.body, { childList: true });
@@ -273,6 +343,7 @@ export class FastInkBridge {
     this.observer?.disconnect();
     this.viewObserver?.disconnect();
     if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
+    if (this.pressTimer !== null) window.clearTimeout(this.pressTimer);
     if (this.frame) cancelAnimationFrame(this.frame);
     const ws = this.socket;
     this.socket = null;
@@ -292,16 +363,48 @@ export class FastInkBridge {
   /**
    * The pen touched the page: the Bridge hears of it at once. It checks that the firmware is
    * drawing this stroke (if not, the firmware pauses, so the screen shows Ink Notebook's own
-   * drawing of it), and measures where the page is on screen from it.
+   * drawing of it). `timeStamp` is the event's own time (performance clock): the Bridge matches the
+   * pen-down with the firmware's by time, and JavaScript may get to the event late.
    */
-  penDown(x: number, y: number): void {
+  penDown(x: number, y: number, timeStamp?: number): void {
     const sent = this.sent;
     if (!this.enabled || !sent?.armed || this.destroyed) return;
     if (this.onPage?.armed) this.onPage.strokes++;
-    const t = Date.now();
+    const now = Date.now();
+    const t = Math.round(eventWallTime(timeStamp, performance.now(), now));
     const d = { x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, t };
-    this.downs = [...this.recentDowns(t), d].slice(-RECENT_DOWNS);
-    this.transmit({ ...sent, seq: ++this.seq, at: t, until: t + this.leaseMs(), clear: this.clearCount, ui: this.uiCount, down: d, downs: this.downs });
+    this.downs = [...this.recentDowns(now), d].slice(-RECENT_DOWNS);
+    this.transmit(this.renewal(sent, now, { down: d, downs: this.downs }));
+  }
+
+  /** The last message again with a new lease, the counters as they are now, and these pen-downs. */
+  private renewal(
+    sent: FastInkMessage,
+    now: number,
+    downs: { down?: FastInkMessage["down"]; downs?: FastInkMessage["downs"] } = {},
+  ): FastInkMessage {
+    return {
+      ...sent,
+      seq: ++this.seq,
+      at: now,
+      until: now + this.leaseMs(),
+      clear: this.clearCount,
+      ui: this.uiCount,
+      uiDone: this.uiDone,
+      down: downs.down,
+      downs: downs.downs ?? this.recentDowns(now),
+    };
+  }
+
+  /**
+   * An event shows where Obsidian's window is on the screen (it carries both positions). Cheap: the
+   * pen's hover moves come a hundred times a second, so moves are looked at only now and then.
+   */
+  private locate(e: PointerEvent, press: boolean): void {
+    if (!e.isTrusted || this.destroyed) return;
+    if (!press && e.timeStamp - this.lastLocateAt < LOCATE_EVERY_MS) return;
+    this.lastLocateAt = e.timeStamp;
+    if (this.origin.add(e.clientX, e.clientY, e.screenX, e.screenY)) this.update();
   }
 
   /**
@@ -363,8 +466,39 @@ export class FastInkBridge {
     // on the page itself: writing, a swipe, a pinch – not a press elsewhere
     if (target && surface.el.contains(target) && !target.closest(UI_SELECTOR)) return;
     this.uiCount++;
-    const t = Date.now();
-    this.transmit({ ...sent, seq: ++this.seq, at: t, until: t + this.leaseMs(), clear: this.clearCount, ui: this.uiCount, down: undefined, downs: this.recentDowns(t) });
+    if (this.pressTimer !== null) window.clearTimeout(this.pressTimer);
+    this.pressTimer = null;
+    this.transmit(this.renewal(sent, Date.now()));
+  }
+
+  /**
+   * The press on a toolbar or card was a click: whatever it changes (a new tool, a card) is changed
+   * by the time anything is sent again (its handlers run in this same event), so from now on every
+   * message includes this press. The Bridge lets the firmware draw again on that, not after a fixed
+   * wait – and never with the pen from before the press. One message is sent for it in any case.
+   */
+  private pressClicked(): void {
+    if (this.uiDone >= this.uiCount || this.destroyed) return;
+    this.uiDone = this.uiCount;
+    this.sendPressResult(0);
+  }
+
+  /** A press that ends without a click (a drag, a long press): its result is sent a moment after it ends. */
+  private pressDoneIn(ms: number): void {
+    if (this.uiDone >= this.uiCount || this.destroyed) return;
+    this.sendPressResult(ms, () => (this.uiDone = this.uiCount));
+  }
+
+  private sendPressResult(ms: number, before?: () => void): void {
+    if (this.pressTimer !== null) window.clearTimeout(this.pressTimer);
+    this.pressTimer = window.setTimeout(() => {
+      this.pressTimer = null;
+      if (this.destroyed) return;
+      before?.();
+      // already on its way with the press's result (the tool change sent it)
+      if (this.sent?.uiDone === this.uiDone) return;
+      this.send(true);
+    }, ms);
   }
 
   /** Follow the active ink page's own changes (its pen cards and panels open and close inside it). */
@@ -404,13 +538,23 @@ export class FastInkBridge {
     const surface = view?.surface;
     // while the pen writes, nothing about the page changes: only renew the lease
     if (surface?.input.busy && this.sent) {
-      if (force) this.transmit({ ...this.sent, seq: ++this.seq, at: now, until: now + this.leaseMs(), clear: this.clearCount, down: undefined, downs: this.recentDowns(now) });
+      if (force) this.transmit(this.renewal(this.sent, now));
       return;
     }
     const s = this.plugin.settings;
-    const inputs = surface ? measureInkPage(surface, { refreshMs: s.fastInkRefreshMs, sideButtonErases: s.sideButton !== "none" }) : NO_INPUTS;
+    const inputs = surface
+      ? measureInkPage(surface, { refreshMs: s.fastInkRefreshMs, sideButtonErases: s.sideButton !== "none", screen: this.origin.value })
+      : NO_INPUTS;
     this.notePage(inputs);
-    const msg = buildMessage(inputs, { seq: this.seq + 1, now, leaseMs: this.leaseMs(), clear: this.clearCount, ui: this.uiCount, downs: this.recentDowns(now) });
+    const msg = buildMessage(inputs, {
+      seq: this.seq + 1,
+      now,
+      leaseMs: this.leaseMs(),
+      clear: this.clearCount,
+      ui: this.uiCount,
+      uiDone: this.uiDone,
+      downs: this.recentDowns(now),
+    });
     const unchanged = sameRequest(this.sent, msg);
     if (!force && unchanged) return;
     // nothing to say: it was off and stays off (while an ink page is open the lease is renewed anyway,

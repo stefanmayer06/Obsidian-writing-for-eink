@@ -48,6 +48,11 @@ import com.onyx.android.sdk.pen.data.TouchPointList
  * So the firmware draws only while the pen is over the page: it pauses the moment
  * the pen goes to a toolbar, something else is pressed, or the page changes, and
  * draws again when the pen next hovers over the page ([InkGate]).
+ *
+ * Where the page is comes from the plugin: the page's part on screen (where ink
+ * stays), the ink view around it, and where Obsidian's window is on the screen.
+ * With that the drawing area is exact from the start; nothing is measured from
+ * strokes (that is only for older plugins that do not say where their window is).
  */
 class BridgeService : Service() {
     private val main = Handler(Looper.getMainLooper())
@@ -73,6 +78,9 @@ class BridgeService : Service() {
     private var calibration = Calibration()
     private var overlayW = 0
     private var overlayH = 0
+    /** Where the overlay starts on the screen (Obsidian's window position is reported on the screen). */
+    private var overlayLeft = 0
+    private var overlayTop = 0
     private var file: ControlFile? = null
     private var socket: ControlSocket? = null
     private var transport = "none"
@@ -197,13 +205,21 @@ class BridgeService : Service() {
             error = "Onyx pen SDK not available: ${e.javaClass.simpleName}"
             null
         }
-        v.addOnLayoutChangeListener { _, l, t, r, b, _, _, _, _ ->
+        v.addOnLayoutChangeListener { view, l, t, r, b, _, _, _, _ ->
             val w = r - l
             val h = b - t
+            val loc = IntArray(2)
+            view.getLocationOnScreen(loc)
+            val moved = loc[0] != overlayLeft || loc[1] != overlayTop
+            overlayLeft = loc[0]
+            overlayTop = loc[1]
             if (w > 0 && h > 0 && (w != overlayW || h != overlayH)) {
                 overlayW = w
                 overlayH = h
                 onOverlayResized()
+            } else if (moved) {
+                state?.win?.let { placeFromWindow(it, state!!.dpr) }
+                applyNow()
             }
         }
     }
@@ -212,13 +228,24 @@ class BridgeService : Service() {
     private fun onOverlayResized() {
         closeRaw()
         calibration.reset(0f, guessOffsetY())
-        val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(calibrationKey(), null)
-        saved?.split(",")?.map { it.toFloatOrNull() }?.let {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        prefs.getString(calibrationKey(), null)?.split(",")?.map { it.toFloatOrNull() }?.let {
             if (it.size >= 2 && it[0] != null && it[1] != null) calibration.restore(it[0]!!, it[1]!!, it.getOrNull(2), it.getOrNull(3))
         }
+        prefs.getString(correctionKey(), null)?.split(",")?.map { it.toFloatOrNull() }?.let {
+            if (it.size >= 2 && it[0] != null && it[1] != null) calibration.restoreCorrection(it[0]!!, it[1]!!)
+        }
+        // the plugin said where its window is: placed from that at once (no strokes needed)
+        state?.win?.let { placeFromWindow(it, state!!.dpr) }
         openRaw()
         applyNow()
         report()
+    }
+
+    /** Obsidian reported where its window is on the screen: the page is placed from that, exactly. */
+    private fun placeFromWindow(win: WindowGeom, dpr: Float) {
+        val (x, y) = windowOffset(win, dpr, overlayLeft, overlayTop)
+        if (calibration.placeFromWindow(x, y)) applied = null
     }
 
     /** Where Obsidian's window probably starts in the overlay: below the status bar. */
@@ -231,10 +258,18 @@ class BridgeService : Service() {
     // v2: offset and scale (the 0.4/0.5 offsets were measured assuming the device pixel ratio)
     private fun calibrationKey() = "cal2_${overlayW}x$overlayH"
 
+    /** A shift between the firmware's pixels and Obsidian's reported window (see Calibration.placeFromWindow). */
+    private fun correctionKey() = "corr_${overlayW}x$overlayH"
+
     private fun saveCalibration() {
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-            .putString(calibrationKey(), "${calibration.offsetX},${calibration.offsetY},${calibration.scaleX ?: ""},${calibration.scaleY ?: ""}")
-            .apply()
+        val c = calibration
+        val edit = getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+        if (c.fromWindow) {
+            edit.putString(correctionKey(), "${c.correctionX},${c.correctionY}")
+        } else {
+            edit.putString(calibrationKey(), "${c.offsetX},${c.offsetY},${c.scaleX ?: ""},${c.scaleY ?: ""}")
+        }
+        edit.apply()
     }
 
     private fun statusBarHeight(): Int {
@@ -255,18 +290,24 @@ class BridgeService : Service() {
         val prev = state
         state = s
         file?.active = s.leased(lastMessageAt)
-        // what the gate waited for (a state sent after a toolbar visit), then what this one changes
-        gate.stateSent(s.at)
+        // where Obsidian's window is: the page is placed from it (no measuring)
+        s.win?.let { placeFromWindow(it, s.dpr) }
+        // what the gate waited for (a state sent after a toolbar visit, or the result of a press), then
+        // what this one changes
+        gate.stateSent(s.at, s.uiDone)
         val screenChanged = prev != null && !s.sameScreen(prev)
         // a press elsewhere: wait for what it changes – unless that came with it (the control file
         // keeps only the latest state, so the press and the new tool can arrive as one)
-        if (prev != null && s.ui != prev.ui && !screenChanged) gate.pressedElsewhere(s.at, lastMessageAt)
+        if (prev != null && s.ui != prev.ui && !screenChanged) gate.pressedElsewhere(s.at, lastMessageAt, s.ui, s.uiDone)
         if (screenChanged) gate.changed()
+        val placed = if (calibration.fromWindow) firmwareRequest(s, calibration, overlayW, overlayH, lastMessageAt) else null
         for (d in s.allDowns) {
             // each pen-down once (later messages repeat the last few)
             if (!strokes.pluginDown(d)) continue
-            // only a stroke while the firmware was drawing must have a pen-down of the firmware's
-            if (!wasDrawingAt(d.t)) strokes.forget(d)
+            // only a stroke while the firmware was drawing must have a pen-down of the firmware's – and,
+            // with the page placed from Obsidian's window, only one that began on the page: off the page
+            // (the grey around it, where no ink stays) the firmware does not draw, by design
+            if (!wasDrawingAt(d.t) || (placed != null && !placedInside(d, s.dpr, placed, ON_PAGE_MARGIN_PX))) strokes.forget(d)
             if (calibration.match(d, s.dpr)) {
                 saveCalibration()
                 applied = null
@@ -301,7 +342,7 @@ class BridgeService : Service() {
             }
             val s = state
             val r = applied
-            if (s != null && r != null && misses.any { placedInside(it, s.dpr, r) } && calibration.distrustScale(s.dpr)) {
+            if (s != null && r != null && misses.any { placedInside(it, s.dpr, r, INSIDE_MARGIN_PX) } && calibration.distrustScale(s.dpr)) {
                 saveCalibration()
                 applied = null
                 applyNow()
@@ -311,10 +352,9 @@ class BridgeService : Service() {
         strokes.nextCheckAt()?.let { main.postDelayed(strokeCheck, maxOf(10L, it - now)) }
     }
 
-    /** By the current placement, the pen-down is well inside the firmware's drawing area. */
-    private fun placedInside(d: PenDown, dpr: Float, r: FirmwareRequest): Boolean {
+    /** By the current placement, the pen-down is at least [m] pixels inside the firmware's drawing area. */
+    private fun placedInside(d: PenDown, dpr: Float, r: FirmwareRequest, m: Int): Boolean {
         val (x, y) = calibration.pointToPx(d.x, d.y, dpr)
-        val m = INSIDE_MARGIN_PX
         val l = r.limit
         return x >= l.l + m && x < l.r - m && y >= l.t + m && y < l.b - m && r.exclude.none { it.contains(x, y, m) }
     }
@@ -572,14 +612,39 @@ class BridgeService : Service() {
             } else {
                 ""
             }
-            return "x ${a.limit.l}–${a.limit.r}, y ${a.limit.t}–${a.limit.b} of ${overlayW}×$overlayH, " +
+            val page = state?.page?.let { p ->
+                val dpr = state?.dpr ?: 1f
+                ", page %.0f×%.0f px".format(p.w * dpr, p.h * dpr)
+            } ?: ""
+            return "x ${a.limit.l}–${a.limit.r}, y ${a.limit.t}–${a.limit.b} of ${overlayW}×$overlayH$page, " +
                 "${a.exclude.size} part(s) left out, offset %.0f, %.0f".format(c.offsetX, c.offsetY) + scale
         }
 
-    /** Measure where Obsidian's page is again (from the next pen-downs). */
+    /** How the page is placed on screen, in words (for the app's screen and the plugin's settings). */
+    val placement: String
+        get() {
+            val c = calibration
+            val w = state?.win
+            return when {
+                c.fromWindow && w != null -> {
+                    val dpr = state?.dpr ?: 1f
+                    val sb = StringBuilder("from Obsidian's window (at %.0f, %.0f on the screen, %.0f×%.0f px)".format(w.x * dpr, w.y * dpr, w.w * dpr, w.h * dpr))
+                    if (c.correctionX != 0f || c.correctionY != 0f) {
+                        sb.append(", shifted by %.0f, %.0f px to where the firmware's pen-downs are".format(c.correctionX, c.correctionY))
+                    }
+                    c.checkedOff?.let { (x, y) -> sb.append("; the firmware's pen-downs are %.0f, %.0f px from it".format(x, y)) }
+                    sb.toString()
+                }
+                c.calibrated -> "measured from strokes (this Ink Notebook does not say where its window is)"
+                else -> "estimated (below the status bar) until Obsidian says where its window is"
+            }
+        }
+
+    /** Place Obsidian's page again: from its window when it says where that is, else from the next pen-downs. */
     private fun recalibrate() {
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(calibrationKey()).apply()
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(calibrationKey()).remove(correctionKey()).apply()
         calibration.reset(0f, guessOffsetY())
+        state?.win?.let { placeFromWindow(it, state!!.dpr) }
         applied = null
         applyNow()
         report()
@@ -662,9 +727,10 @@ class BridgeService : Service() {
         val json = BridgeState.status(
             enabled, c.calibrated, c.offsetX, c.offsetY, transport, error, state?.seq ?: 0, penHovers, penStrokes,
             paused = gate.reason, missed = strokes.missed, lastMissed = strokes.lastMissed, area = drawingArea,
+            placement = placement,
         )
         socket?.send(json)
-        val key = "$enabled|${c.calibrated}|$transport|$error|$penStrokes|${strokes.missed}"
+        val key = "$enabled|${c.calibrated}|${c.fromWindow}|${c.correctionX},${c.correctionY}|$transport|$error|$penStrokes|${strokes.missed}"
         val now = System.currentTimeMillis()
         if (force || key != lastStatusKey || now - lastStatusWrite > STATUS_EVERY_MS) {
             file?.writeStatus(json)
@@ -716,6 +782,8 @@ class BridgeService : Service() {
         private const val NO_HOVER_RELEASE_MS = 300L
         /** A missed stroke this far inside the drawing area (px) means the placement is wrong. */
         private const val INSIDE_MARGIN_PX = 40
+        /** With the page placed from Obsidian's window, a pen-down this far inside the page (px) must be drawn by the firmware. */
+        private const val ON_PAGE_MARGIN_PX = 2
         private const val STATUS_EVERY_MS = 5_000L
         const val TEST_MS = 30_000L
         const val EXTRA_FEATURE = "feature"

@@ -10,22 +10,37 @@ data class PxRect(val l: Int, val t: Int, val r: Int, val b: Int) {
 /** Pixels around the page where the pen counts as still over it (writing near the edge). */
 const val EDGE_PX = 24
 
-/** What the pen hovers over, for [InkGate]: the page, its edge, or something else (a toolbar, a card, Obsidian). */
+/**
+ * What the pen hovers over, for [InkGate]: the page, next to it (its edge, or the ink view around
+ * it, which the plugin says is not a toolbar), or something else (a toolbar, a card, Obsidian).
+ */
 fun zoneOf(x: Float, y: Float, r: FirmwareRequest): InkGate.Zone = when {
     r.exclude.any { it.contains(x, y) } -> InkGate.Zone.AWAY
     r.limit.contains(x, y) -> InkGate.Zone.PAGE
     r.limit.contains(x, y, EDGE_PX) -> InkGate.Zone.EDGE
+    r.surface?.contains(x, y) == true -> InkGate.Zone.EDGE
     else -> InkGate.Zone.AWAY
 }
 
-/** What the firmware is asked to do: draw inside [limit] but not in [exclude], with [pen]. */
+/**
+ * What the firmware is asked to do: draw inside [limit] (the page, where ink stays) but not in
+ * [exclude], with [pen]. [surface] is the ink view around the page (null from older plugins).
+ */
 data class FirmwareRequest(
     val limit: PxRect,
     val exclude: List<PxRect>,
     val pen: PenSpec,
     val refreshMs: Int,
     val sideButton: Boolean,
+    val surface: PxRect? = null,
 )
+
+/**
+ * Where Obsidian's window starts in the overlay's pixels, from the plugin's report ([WindowGeom], CSS
+ * pixels on the screen) and where the overlay starts on the screen.
+ */
+fun windowOffset(win: WindowGeom, dpr: Float, overlayLeft: Int, overlayTop: Int): kotlin.Pair<Float, Float> =
+    kotlin.Pair(win.x * dpr - overlayLeft, win.y * dpr - overlayTop)
 
 /**
  * The firmware request for the plugin's state, or null when the firmware should
@@ -42,5 +57,6 @@ fun firmwareRequest(state: BridgeState?, calibration: Calibration, overlayW: Int
         .map { calibration.toPx(it, state.dpr, grow = true) }
         .map { PxRect(it[0], it[1], it[2], it[3]) }
         .filter { it.intersects(limit) }
-    return FirmwareRequest(limit, exclude, state.pen, state.refreshMs, state.sideButtonErases)
+    val surface = state.surface?.let { calibration.toPx(it, state.dpr, grow = true) }?.let { PxRect(it[0], it[1], it[2], it[3]) }
+    return FirmwareRequest(limit, exclude, state.pen, state.refreshMs, state.sideButtonErases, surface)
 }

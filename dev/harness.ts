@@ -90,7 +90,7 @@ const surface = new InkSurface(root, {
   },
   notice: (m) => log.push(`notice:${m}`),
   viewChanged: () => fastInk?.update(),
-  penDown: (x, y) => fastInk?.penDown(x, y),
+  penDown: (x, y, t) => fastInk?.penDown(x, y, t),
   inkDiscarded: () => fastInk?.discard(),
   pageRedrawn: () => fastInk?.refreshSoon(),
 });
@@ -159,7 +159,8 @@ function attachFastInk(): FastInkBridge {
         },
       },
     },
-    registerDomEvent: (el: EventTarget, name: string, fn: EventListener) => el.addEventListener(name, fn),
+    // as Obsidian's: the options (capture) go along
+    registerDomEvent: (el: EventTarget, name: string, fn: EventListener, opts?: AddEventListenerOptions) => el.addEventListener(name, fn, opts),
     registerInterval: (id: number) => id,
   } as unknown as InkNotebookPlugin;
   fastInk = new FastInkBridge(plugin, () => ({ surface, containerEl: root }));

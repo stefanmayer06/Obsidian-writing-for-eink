@@ -221,7 +221,7 @@ export class InputRouter {
     }
     const tool = this.toolFor(e);
     if (tool === "none") return;
-    if (e.pointerType === "pen") this.s.host.penDown?.(e.clientX, e.clientY);
+    if (e.pointerType === "pen") this.s.host.penDown?.(e.clientX, e.clientY, e.timeStamp);
     const rect = this.s.el.getBoundingClientRect();
     if (tool !== "lasso" && tool !== "eraser") {
       const target = this.linkAt(this.s.toPage(e.clientX, e.clientY, rect));

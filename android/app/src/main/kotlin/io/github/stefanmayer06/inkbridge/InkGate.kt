@@ -19,20 +19,29 @@ package io.github.stefanmayer06.inkbridge
  * It draws again as soon as the pen hovers over the page – always before the pen
  * touches it, so no stroke is missed. After a visit to a toolbar (or a press on
  * one) it first waits a moment for the plugin's word on what was chosen, so that
- * the old pen does not draw after the eraser was picked.
+ * the old pen does not draw after the eraser was picked. Newer plugins say which
+ * presses their state includes, so after a press the wait ends exactly when the
+ * result arrives.
+ *
+ * The page itself, and the ink view around it, never stop it: the pen moving
+ * there, writing or hovering, keeps the firmware drawing.
  */
 class InkGate(
     /** The pen must hover over something that is not the page this long before the firmware stops (a quick pass is not a visit). */
     private val awayDwellMs: Long = 60,
-    /** After the pen left a toolbar, wait this long for the plugin's state (unless it came sooner). */
-    private val awayGraceMs: Long = 250,
+    /**
+     * After the pen left a toolbar, wait this long for the plugin's state (unless it came sooner). A press
+     * there is sent the moment it starts, and is on its way long before the pen is back over the page:
+     * this only covers a slow write of the control file.
+     */
+    private val awayGraceMs: Long = 150,
     /** After a press on a toolbar, wait this long from the press for the plugin's state (unless it came sooner). */
     private val pressGraceMs: Long = 400,
 ) {
     enum class Zone {
         /** Over the page, where the firmware draws. */
         PAGE,
-        /** Just outside the page: no change (writing near the edge must not stop the ink). */
+        /** Next to the page – its edge, or the ink view around it: no change (writing near the edge must not stop the ink). */
         EDGE,
         /** Over something else: a toolbar, a card, Obsidian. */
         AWAY,
@@ -47,8 +56,10 @@ class InkGate(
     private var awayFrom = -1L
     /** Waiting for the plugin's word until then (0: not waiting) … */
     private var waitUntil = 0L
-    /** … which a state it sent after this ends. */
+    /** … which a state it sent after this ends … */
     private var waitFrom = 0L
+    /** … or, from plugins that say so, a state that includes this press (0: none awaited). */
+    private var waitUi = 0L
 
     /** Why the firmware does not draw now, in words (null when it draws). */
     var reason: String? = "off"
@@ -72,6 +83,7 @@ class InkGate(
         drawing = false
         awayFrom = -1
         waitUntil = 0
+        waitUi = 0
     }
 
     /** The plugin's toolbars, cards or pen changed: the panel shows that first. */
@@ -88,19 +100,41 @@ class InkGate(
 
     /**
      * Something other than the page was pressed (the plugin reports it at once, before it changes
-     * anything): stop, and wait for what the press changes.
+     * anything): stop, and wait for what the press changes. [ui] is the press's number and [uiDone] the
+     * presses the same message already includes (null: an older plugin, which does not say).
+     *
+     * It stops even mid-stroke: the plugin does not count presses while the pen writes on the page, so
+     * a stroke now is one the firmware began before this press arrived (a slow control file), maybe
+     * with the pen from before it.
      */
-    fun pressedElsewhere(sentAt: Long, now: Long) {
+    fun pressedElsewhere(sentAt: Long, now: Long, ui: Long = 0, uiDone: Long? = null) {
         if (!armed) return
-        val at = if (sentAt in (now - 5_000)..now) sentAt else now
-        waitFrom = maxOf(waitFrom, at)
-        waitUntil = maxOf(waitUntil, at + pressGraceMs)
-        holdSoon("a toolbar was pressed")
+        if (uiDone == null || uiDone < ui) {
+            val at = if (sentAt in (now - 5_000)..now) sentAt else now
+            waitFrom = maxOf(waitFrom, at)
+            waitUntil = maxOf(waitUntil, at + pressGraceMs)
+            if (uiDone != null) waitUi = maxOf(waitUi, ui)
+        }
+        hold("a toolbar was pressed")
     }
 
-    /** A state from the plugin, sent at [sentAt]: what the wait was for, if it was sent after the wait began. */
-    fun stateSent(sentAt: Long) {
-        if (waitUntil != 0L && sentAt > waitFrom) waitUntil = 0
+    /**
+     * A state from the plugin, sent at [sentAt], including the presses up to [uiDone] (null: an older
+     * plugin): what the wait was for – the result of the awaited press, or else anything sent after the
+     * wait began.
+     */
+    fun stateSent(sentAt: Long, uiDone: Long? = null) {
+        if (waitUntil == 0L) return
+        if (waitUi > 0 && uiDone != null) {
+            if (uiDone >= waitUi) endWait()
+            return
+        }
+        if (sentAt > waitFrom) endWait()
+    }
+
+    private fun endWait() {
+        waitUntil = 0
+        waitUi = 0
     }
 
     /** The firmware reports the pen hovering over [zone]. */
@@ -118,7 +152,7 @@ class InkGate(
                 if (held && heldAtPenUp == null && !drawing && (waitUntil == 0L || now >= waitUntil)) {
                     held = false
                     reason = null
-                    waitUntil = 0
+                    endWait()
                 }
             }
             Zone.EDGE -> awayFrom = -1

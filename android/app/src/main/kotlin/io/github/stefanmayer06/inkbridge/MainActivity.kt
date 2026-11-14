@@ -280,7 +280,7 @@ class MainActivity : Activity() {
                 }
                 if (svc.touchEvents > 0) append(" Pen events to the Bridge: ${svc.touchEvents}.")
                 append("\n")
-                append(if (svc.isCalibrated) "Position: measured." else "Position: estimated. It is measured from your first strokes.")
+                append("Position: ${svc.placement}.")
                 append("\n")
                 append("Drawing area: ${svc.drawingArea}")
                 svc.lastError?.let { append("\nProblem: $it") }
