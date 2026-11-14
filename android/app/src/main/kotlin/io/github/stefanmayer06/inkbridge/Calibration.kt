@@ -19,6 +19,15 @@ import kotlin.math.sqrt
  * with presses spread over the page, scale and offset are fitted per axis
  * (least squares), and the fit is used only when the presses agree with it.
  * Until then the first guess holds.
+ *
+ * That measuring is only for plugins that do not say where their window is.
+ * Newer ones do ([placeFromWindow]): every pen and finger event in Obsidian
+ * carries its screen position too, so the plugin knows where its window starts
+ * and the placement follows exactly – the scale is the device pixel ratio, the
+ * offset the window's position less the overlay's. Pen-downs then only check it:
+ * if the firmware's pen-downs are all shifted by the same amount (its pixels
+ * count from somewhere other than the overlay's corner), that shift is taken
+ * over once and kept; nothing is fitted, and nothing changes stroke by stroke.
  */
 class Calibration(private var guessX: Float = 0f, private var guessY: Float = 0f) {
     private data class Raw(val x: Float, val y: Float, val t: Long)
@@ -40,6 +49,19 @@ class Calibration(private var guessX: Float = 0f, private var guessY: Float = 0f
     var calibrated = false
         private set
 
+    /** Placed from Obsidian's own report of where its window is ([placeFromWindow]); pen-downs only check it. */
+    var fromWindow = false
+        private set
+    /** A constant shift the firmware's pen-downs showed against Obsidian's report (kept per screen size). */
+    var correctionX = 0f
+        private set
+    var correctionY = 0f
+        private set
+    /** How far the firmware's recent pen-downs were from where the placement puts them (px, median), or null. */
+    var checkedOff: kotlin.Pair<Float, Float>? = null
+        private set
+    private val checks = ArrayDeque<kotlin.Pair<Float, Float>>()
+
     /** Start again (the screen turned, the overlay changed size, or asked from the app). */
     fun reset(guessX: Float = this.guessX, guessY: Float = this.guessY) {
         this.guessX = guessX
@@ -52,6 +74,43 @@ class Calibration(private var guessX: Float = 0f, private var guessY: Float = 0f
         scaleY = null
         calibrated = false
         lastMatched = Long.MIN_VALUE
+        fromWindow = false
+        correctionX = 0f
+        correctionY = 0f
+        checks.clear()
+        checkedOff = null
+    }
+
+    /**
+     * Obsidian said where its window is: the offset is [baseX], [baseY] (the window's corner in overlay
+     * pixels) plus a shift the firmware's pen-downs showed before, and the scale is the device pixel
+     * ratio. True when the placement changed.
+     */
+    fun placeFromWindow(baseX: Float, baseY: Float): Boolean {
+        val x = baseX + correctionX
+        val y = baseY + correctionY
+        val changed = !fromWindow || abs(x - offsetX) > 0.25f || abs(y - offsetY) > 0.25f || scaleX != null || scaleY != null
+        if (!fromWindow) {
+            checks.clear()
+            checkedOff = null
+        }
+        fromWindow = true
+        calibrated = true
+        offsetX = x
+        offsetY = y
+        scaleX = null
+        scaleY = null
+        return changed
+    }
+
+    /** A shift measured before at this screen size (see [placeFromWindow]). */
+    fun restoreCorrection(x: Float, y: Float) {
+        if (fromWindow) {
+            offsetX += x - correctionX
+            offsetY += y - correctionY
+        }
+        correctionX = x
+        correctionY = y
     }
 
     /** Use a stored measurement (made before at this screen size). */
@@ -81,6 +140,7 @@ class Calibration(private var guessX: Float = 0f, private var guessY: Float = 0f
         val best = near[0]
         lastMatched = down.t
         val p = Press(down.x, down.y, best.x, best.y)
+        if (fromWindow) return check(p, dpr)
         // not the same press (or a wildly wrong one): with the current placement it would be far off
         val ex = abs(p.rx - (p.cx * (scaleX ?: dpr) + offsetX))
         val ey = abs(p.ry - (p.cy * (scaleY ?: dpr) + offsetY))
@@ -89,6 +149,35 @@ class Calibration(private var guessX: Float = 0f, private var guessY: Float = 0f
         pairs.addLast(p)
         while (pairs.size > MAX_PAIRS) pairs.removeFirst()
         return refit(dpr)
+    }
+
+    /**
+     * Obsidian placed the page; a pen-down only checks the placement. When the last few pen-downs are
+     * all off by the same amount (within a few pixels of each other), that is a constant shift between
+     * the firmware's pixels and the overlay's: it is taken over once. True when that changed the placement.
+     */
+    private fun check(p: Press, dpr: Float): Boolean {
+        val ex = p.rx - (p.cx * dpr + offsetX)
+        val ey = p.ry - (p.cy * dpr + offsetY)
+        if (abs(ex) > MAX_OFFSET || abs(ey) > MAX_OFFSET) return false
+        checks.addLast(kotlin.Pair(ex, ey))
+        while (checks.size > CHECKS_KEPT) checks.removeFirst()
+        checkedOff = kotlin.Pair(median(checks.map { it.first }), median(checks.map { it.second }))
+        if (checks.size < CHECKS_AGREE) return false
+        val last = checks.toList().takeLast(CHECKS_AGREE)
+        val xs = last.map { it.first }
+        val ys = last.map { it.second }
+        if (xs.max() - xs.min() > CHECK_SPREAD || ys.max() - ys.min() > CHECK_SPREAD) return false
+        val dx = median(xs).takeIf { abs(it) > CHECK_TOLERANCE } ?: 0f
+        val dy = median(ys).takeIf { abs(it) > CHECK_TOLERANCE } ?: 0f
+        if (dx == 0f && dy == 0f) return false
+        correctionX += dx
+        correctionY += dy
+        offsetX += dx
+        offsetY += dy
+        checks.clear()
+        checkedOff = null
+        return true
     }
 
     private fun refit(dpr: Float): Boolean {
@@ -111,7 +200,7 @@ class Calibration(private var guessX: Float = 0f, private var guessY: Float = 0f
      * True when that changed the placement.
      */
     fun distrustScale(dpr: Float): Boolean {
-        if (scaleX == null && scaleY == null) return false
+        if (fromWindow || (scaleX == null && scaleY == null)) return false
         scaleX = null
         scaleY = null
         if (pairs.isNotEmpty()) {
@@ -156,6 +245,14 @@ class Calibration(private var guessX: Float = 0f, private var guessY: Float = 0f
 
         /** Device pixels added around parts left out of the drawing area. */
         const val MARGIN = 4f
+
+        /** Pen-downs kept to check a placement from Obsidian's window, and how many must agree on a shift. */
+        private const val CHECKS_KEPT = 8
+        private const val CHECKS_AGREE = 3
+        /** They agree when within this many pixels of each other … */
+        private const val CHECK_SPREAD = 6f
+        /** … and a shift is taken over only when larger than this (the pen's own scatter is smaller). */
+        private const val CHECK_TOLERANCE = 6f
 
         private fun median(values: List<Float>): Float {
             val s = values.sorted()

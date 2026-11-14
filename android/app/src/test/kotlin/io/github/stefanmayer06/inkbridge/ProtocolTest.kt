@@ -57,6 +57,28 @@ class ProtocolTest {
     }
 
     @Test
+    fun readsWhereObsidiansWindowAndPageAre() {
+        val s = BridgeState.parse(
+            message.replace(
+                "\"clear\":3,",
+                "\"clear\":3,\"uiDone\":6,\"page\":{\"x\":12,\"y\":70.5,\"w\":596,\"h\":843},\"surface\":{\"x\":0,\"y\":56,\"w\":620,\"h\":900}," +
+                    "\"win\":{\"x\":0,\"y\":24,\"w\":620,\"h\":956,\"sw\":620,\"sh\":980},",
+            ),
+        )!!
+        assertEquals(CssRect(12f, 70.5f, 596f, 843f), s.page)
+        assertEquals(CssRect(0f, 56f, 620f, 900f), s.surface)
+        assertEquals(WindowGeom(0f, 24f, 620f, 956f, 620f, 980f), s.win)
+        assertEquals(6L, s.uiDone)
+        // from plugins that do not say: none
+        val old = BridgeState.parse(message)!!
+        assertNull(old.win)
+        assertNull(old.surface)
+        assertNull(old.uiDone)
+        // a window position that is no number is dropped
+        assertNull(BridgeState.parse(message.replace("\"clear\":3,", "\"clear\":3,\"win\":{\"x\":\"a\",\"y\":2},"))!!.win)
+    }
+
+    @Test
     fun tellsScreenChangesFromRenewals() {
         val s = BridgeState.parse(message)!!
         assertTrue(s.sameScreen(s.copy(seq = 43, until = 9000, at = 5, ui = 1, clear = 4, down = null)))
@@ -64,6 +86,11 @@ class ProtocolTest {
         assertFalse(s.sameScreen(s.copy(exclude = emptyList())))
         assertFalse(s.sameScreen(s.copy(pen = s.pen.copy(width = 6f))))
         assertFalse(s.sameScreen(s.copy(armed = false)))
+        // the window moved (split screen) or the ink view changed: the firmware's area changes
+        assertFalse(s.sameScreen(s.copy(win = WindowGeom(0f, 24f, 620f, 956f, 620f, 980f))))
+        assertFalse(s.sameScreen(s.copy(surface = CssRect(0f, 56f, 620f, 900f))))
+        // the press results it includes, and the whole page (its part on screen is the region), are not
+        assertTrue(s.sameScreen(s.copy(uiDone = 9, page = CssRect(-100f, -50f, 2000f, 3000f))))
     }
 
     @Test
@@ -118,6 +145,80 @@ class ProtocolTest {
 }
 
 class CalibrationTest {
+    @Test
+    fun placesFromObsidiansWindowWithoutStrokes() {
+        val c = Calibration(0f, 40f)
+        // Obsidian's window starts 24 CSS px down (48 px), the overlay 0 px: nothing to measure
+        val (x, y) = windowOffset(WindowGeom(0f, 24f, 620f, 956f, 620f, 980f), 2f, 0, 0)
+        assertTrue(c.placeFromWindow(x, y))
+        assertTrue(c.calibrated)
+        assertTrue(c.fromWindow)
+        assertArrayEquals(intArrayOf(0, 160, 1240, 1760), c.toPx(CssRect(0f, 56f, 620f, 800f), 2f, grow = false))
+        // the same report again changes nothing
+        assertFalse(c.placeFromWindow(x, y))
+        // an overlay that starts below the status bar counts from there
+        assertEquals(kotlin.Pair(0f, 8f), windowOffset(WindowGeom(0f, 24f, 620f, 956f, 620f, 980f), 2f, 0, 40))
+    }
+
+    @Test
+    fun penDownsOnlyCheckAPlacementFromTheWindow() {
+        val c = Calibration(0f, 40f)
+        c.placeFromWindow(0f, 48f)
+        // presses spread over the page, each a pixel or two off (the pen's scatter): nothing changes
+        val presses = listOf(100f to 100f, 500f to 300f, 300f to 700f, 600f to 900f)
+        for ((i, p) in presses.withIndex()) {
+            val t = 1000L * (i + 1)
+            c.recordRaw(p.first * 2f + (i % 2), p.second * 2f + 48f - (i % 3), t)
+            assertFalse(c.match(PenDown(p.first, p.second, t + 5), 2f))
+        }
+        assertEquals(0f, c.offsetX)
+        assertEquals(48f, c.offsetY)
+        assertNull("no scale is measured", c.scaleX)
+        assertNotNull(c.checkedOff)
+        // a missed stroke does not move it either
+        assertFalse(c.distrustScale(2f))
+    }
+
+    @Test
+    fun aConstantShiftOfTheFirmwareIsTakenOverOnce() {
+        // the firmware's pixels count from the screen's corner, the overlay starts 40 px down
+        val c = Calibration(0f, 40f)
+        c.placeFromWindow(0f, 8f)
+        val presses = listOf(100f to 100f, 500f to 300f, 300f to 700f)
+        var changed = false
+        for ((i, p) in presses.withIndex()) {
+            val t = 1000L * (i + 1)
+            c.recordRaw(p.first * 2f, p.second * 2f + 48f + (i % 2), t)
+            changed = c.match(PenDown(p.first, p.second, t + 5), 2f) || changed
+        }
+        assertTrue(changed)
+        assertEquals(0f, c.correctionX)
+        // the median of 40, 41, 40
+        assertEquals(40f, c.correctionY)
+        assertEquals(48f, c.offsetY)
+        // kept when Obsidian reports its window again
+        assertFalse(c.placeFromWindow(0f, 8f))
+        assertEquals(48f, c.offsetY)
+        // and from before, at this screen size
+        val d = Calibration(0f, 40f)
+        d.restoreCorrection(0f, 40f)
+        d.placeFromWindow(0f, 8f)
+        assertEquals(48f, d.offsetY)
+    }
+
+    @Test
+    fun scatteredPenDownsAreNoShift() {
+        val c = Calibration(0f, 40f)
+        c.placeFromWindow(0f, 48f)
+        // three presses off by 20, 0 and -20: no agreement, no change
+        for ((i, off) in listOf(20f, 0f, -20f).withIndex()) {
+            val t = 1000L * (i + 1)
+            c.recordRaw(200f + 300f * i, 248f + off, t)
+            assertFalse(c.match(PenDown(100f + 150f * i, 100f, t), 2f))
+        }
+        assertEquals(48f, c.offsetY)
+    }
+
     @Test
     fun startsFromTheGuess() {
         val c = Calibration(0f, 40f)

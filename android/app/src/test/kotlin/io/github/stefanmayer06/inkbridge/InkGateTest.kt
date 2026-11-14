@@ -66,10 +66,45 @@ class InkGateTest {
         g.hover(Zone.AWAY, 200) // last hover over the toolbar
         g.hover(Zone.PAGE, 300)
         assertFalse(g.draws)
-        g.hover(Zone.PAGE, 449)
+        g.hover(Zone.PAGE, 349)
         assertFalse(g.draws)
-        g.hover(Zone.PAGE, 451)
+        g.hover(Zone.PAGE, 351)
         assertTrue(g.draws)
+    }
+
+    @Test
+    fun afterAPressItWaitsForTheResultOfThatPress() {
+        val g = armedOverPage()
+        // press no. 3 on the toolbar; the plugin's message says it includes presses up to 2
+        g.pressedElsewhere(sentAt = 1000, now = 1030, ui = 3, uiDone = 2)
+        assertFalse(g.draws)
+        // a message sent after the press, but from before its result (a lease renewal): still waiting
+        g.stateSent(1050, uiDone = 2)
+        g.hover(Zone.PAGE, 1100)
+        assertFalse(g.draws)
+        // the result: drawing again at once, not after the fixed wait
+        g.stateSent(1120, uiDone = 3)
+        g.hover(Zone.PAGE, 1130)
+        assertTrue(g.draws)
+    }
+
+    @Test
+    fun aPressThatArrivesWithItsResultDoesNotWait() {
+        // the control file keeps only the latest message: the press and its result came as one
+        val g = armedOverPage()
+        g.pressedElsewhere(sentAt = 1000, now = 1030, ui = 3, uiDone = 3)
+        assertFalse("the panel shows the result first", g.draws)
+        g.hover(Zone.PAGE, 1040)
+        assertTrue(g.draws)
+    }
+
+    @Test
+    fun aPressThatArrivesMidStrokeStopsTheInkAtOnce() {
+        // the firmware drew again before a slow press message came: that stroke may have the old pen
+        val g = armedOverPage()
+        g.penDown()
+        g.pressedElsewhere(sentAt = 1000, now = 1030, ui = 1, uiDone = 0)
+        assertFalse(g.draws)
     }
 
     @Test
@@ -180,5 +215,12 @@ class InkGateTest {
         // the toolbar above it
         assertEquals(Zone.AWAY, zoneOf(500f, 40f, r))
         assertEquals(Zone.AWAY, zoneOf(500f, 1600f, r))
+        // the ink view around the page (the grey margin, below the page) is not a toolbar
+        val withView = r.copy(limit = PxRect(40, 120, 960, 1400), surface = PxRect(0, 100, 1000, 1500))
+        assertEquals(Zone.PAGE, zoneOf(500f, 800f, withView))
+        assertEquals(Zone.EDGE, zoneOf(500f, 1480f, withView))
+        assertEquals(Zone.EDGE, zoneOf(10f, 800f, withView))
+        assertEquals(Zone.AWAY, zoneOf(800f, 300f, withView))
+        assertEquals(Zone.AWAY, zoneOf(500f, 40f, withView))
     }
 }

@@ -10,10 +10,11 @@ import org.json.JSONObject
  *
  * The test page sends the plugin's state (the real plugin code) and, as the
  * firmware's pen reader would, `{"type":"raw-test","x":…,"y":…,"t":…}` for each
- * pen-down in screen pixels. Every request the firmware would get is broadcast
+ * pen-down in screen pixels. The overlay starts at the screen's top-left corner
+ * (`[overlayTop]` moves it down, as the status bar does on some tablets). Every request the firmware would get is broadcast
  * as `{"type":"firmware-test",…}`, and the Bridge's status as usual.
  *
- * Run: java -cp <unit test classpath> io.github.stefanmayer06.inkbridge.E2eServer [port] [overlayW] [overlayH] [guessY]
+ * Run: java -cp <unit test classpath> io.github.stefanmayer06.inkbridge.E2eServer [port] [overlayW] [overlayH] [guessY] [overlayTop]
  */
 object E2eServer {
     @JvmStatic
@@ -22,6 +23,7 @@ object E2eServer {
         val w = args.getOrNull(1)?.toInt() ?: 1520
         val h = args.getOrNull(2)?.toInt() ?: 2000
         val guessY = args.getOrNull(3)?.toFloat() ?: 40f
+        val overlayTop = args.getOrNull(4)?.toInt() ?: 0
         val cal = Calibration(0f, guessY)
         var state: BridgeState? = null
         var lastClear: Long? = null
@@ -39,16 +41,21 @@ object E2eServer {
                 .put("seq", state?.seq ?: 0)
                 .put("armed", req != null)
                 .put("calibrated", cal.calibrated)
+                .put("fromWindow", cal.fromWindow)
+                .put("correction", JSONArray(listOf(cal.correctionX.toDouble(), cal.correctionY.toDouble())))
                 .put("offset", JSONArray(listOf(cal.offsetX.toDouble(), cal.offsetY.toDouble())))
                 .put("clears", clears)
                 .put("ui", state?.ui ?: 0)
+                .put("uiDone", state?.uiDone ?: JSONObject.NULL)
                 .put("missed", strokes.missed)
+                .put("win", state?.win?.let { JSONArray(listOf(it.x.toDouble(), it.y.toDouble())) } ?: JSONObject.NULL)
             if (req != null) {
                 o.put("limit", arr(req.limit))
                 o.put("exclude", JSONArray(req.exclude.map { arr(it) }))
                 o.put("pen", JSONObject().put("style", req.pen.style).put("width", req.pen.width.toDouble()).put("color", req.pen.color))
                 o.put("refreshMs", req.refreshMs)
                 o.put("sideButton", req.sideButton)
+                req.surface?.let { o.put("surface", arr(it)) }
             }
             server.send(o.toString())
             server.send(BridgeState.status(req != null, cal.calibrated, cal.offsetX, cal.offsetY, "socket", null, state?.seq ?: 0))
@@ -66,10 +73,18 @@ object E2eServer {
                         val s = BridgeState.parse(text)
                         if (s != null) {
                             state = s
-                            val drawing = firmwareRequest(s, cal, w, h, System.currentTimeMillis()) != null
+                            // as the Bridge: placed from Obsidian's window when it says where that is
+                            s.win?.let { win ->
+                                val (x, y) = windowOffset(win, s.dpr, 0, overlayTop)
+                                cal.placeFromWindow(x, y)
+                            }
+                            val req = firmwareRequest(s, cal, w, h, System.currentTimeMillis())
                             for (d in s.allDowns) {
                                 if (!strokes.pluginDown(d)) continue
-                                if (!drawing) strokes.forget(d)
+                                // only strokes the firmware should draw: while drawing, and (placed from the window) on the page
+                                val (px, py) = cal.pointToPx(d.x, d.y, s.dpr)
+                                val onPage = req != null && px >= req.limit.l + 2 && px < req.limit.r - 2 && py >= req.limit.t + 2 && py < req.limit.b - 2
+                                if (req == null || (cal.fromWindow && !onPage)) strokes.forget(d)
                                 cal.match(d, s.dpr)
                             }
                             if (lastClear != null && lastClear != s.clear) clears++

@@ -13,11 +13,19 @@ import org.json.JSONObject
  * so "clear the fast ink" is a counter in the state rather than a separate message.
  *
  * Rectangles are CSS pixels relative to Obsidian's window; [dpr] converts them to
- * device pixels and [Calibration] adds where that window is on the screen.
+ * device pixels and [Calibration] adds where that window is on the screen – which
+ * the plugin reports itself ([WindowGeom]), so nothing has to be measured.
  */
 data class CssRect(val x: Float, val y: Float, val w: Float, val h: Float) {
     val isEmpty: Boolean get() = !(w > 0f && h > 0f)
 }
+
+/**
+ * Where Obsidian's window is on the screen, as Obsidian reports it (CSS pixels): its top-left corner
+ * (from its pen and finger events, which carry the screen position too), its size and the screen's.
+ * A CSS pixel (cx, cy) is the screen pixel ((cx + x) × dpr, (cy + y) × dpr).
+ */
+data class WindowGeom(val x: Float, val y: Float, val w: Float, val h: Float, val sw: Float, val sh: Float)
 
 /** A pen-down as the plugin saw it (CSS pixels, wall clock ms), to calibrate the position. */
 data class PenDown(val x: Float, val y: Float, val t: Long)
@@ -47,6 +55,14 @@ data class BridgeState(
     val ui: Long = 0,
     /** The plugin's pen-downs of the last moments (each is sent the moment it happens; the control file keeps only the latest message). */
     val downs: List<PenDown> = emptyList(),
+    /** The whole page (CSS pixels; [region] is its part on screen, where the pen writes ink). */
+    val page: CssRect? = null,
+    /** The ink view around the page: the pen hovering there is not away from the page. */
+    val surface: CssRect? = null,
+    /** Where Obsidian's window is on the screen (null: an older plugin, or no event has shown it yet). */
+    val win: WindowGeom? = null,
+    /** The presses (of [ui]) whose result this state includes (null: an older plugin, which does not say). */
+    val uiDone: Long? = null,
 ) {
     /** Every pen-down this message reports. */
     val allDowns: List<PenDown> get() = if (down == null || downs.any { it.t == down.t }) downs else downs + down
@@ -57,8 +73,9 @@ data class BridgeState(
     /** The plugin still holds its lease (armed or not): its page is open, and it may arm at any moment. */
     fun leased(now: Long): Boolean = until > now
 
-    /** The same request for the screen (the page, what covers it, the pen); lease, counters and pen-down aside. */
-    fun sameScreen(o: BridgeState?): Boolean = o != null && armed == o.armed && region == o.region && exclude == o.exclude && pen == o.pen
+    /** The same request for the screen (the page, what covers it, the pen, the window); lease, counters and pen-down aside. */
+    fun sameScreen(o: BridgeState?): Boolean =
+        o != null && armed == o.armed && region == o.region && exclude == o.exclude && pen == o.pen && surface == o.surface && win == o.win
 
     companion object {
         const val VERSION = 1
@@ -104,6 +121,20 @@ data class BridgeState(
                 o.optDouble("h", 0.0).toFloat(),
             )
             return if (r.x.isFinite() && r.y.isFinite() && r.w.isFinite() && r.h.isFinite()) r else null
+        }
+
+        private fun windowOf(o: JSONObject?): WindowGeom? {
+            if (o == null || !o.has("x") || !o.has("y")) return null
+            val w = WindowGeom(
+                o.optDouble("x").toFloat(),
+                o.optDouble("y").toFloat(),
+                o.optDouble("w", 0.0).toFloat(),
+                o.optDouble("h", 0.0).toFloat(),
+                o.optDouble("sw", 0.0).toFloat(),
+                o.optDouble("sh", 0.0).toFloat(),
+            )
+            val ok = listOf(w.x, w.y, w.w, w.h, w.sw, w.sh).all { it.isFinite() } && kotlin.math.abs(w.x) < 20_000 && kotlin.math.abs(w.y) < 20_000
+            return if (ok) w else null
         }
 
         private fun downOf(o: JSONObject?): PenDown? {
@@ -152,6 +183,10 @@ data class BridgeState(
                     at = o.optLong("at", 0),
                     ui = o.optLong("ui", 0),
                     downs = downsOf(o.optJSONArray("downs")),
+                    page = rect(o.optJSONObject("page"))?.takeIf { !it.isEmpty },
+                    surface = rect(o.optJSONObject("surface"))?.takeIf { !it.isEmpty },
+                    win = windowOf(o.optJSONObject("win")),
+                    uiDone = if (o.has("uiDone")) o.optLong("uiDone", 0) else null,
                 )
             }
         } catch (e: Exception) {
@@ -176,6 +211,8 @@ data class BridgeState(
             lastMissed: PenDown? = null,
             /** The firmware's drawing area in words (for the plugin's settings). */
             area: String? = null,
+            /** How the page was placed on screen, in words (from Obsidian's window, measured, guessed). */
+            placement: String? = null,
         ): String = JSONObject()
             .put("v", VERSION)
             .put("type", "status")
@@ -193,11 +230,12 @@ data class BridgeState(
             .put("missed", missed)
             .apply { if (lastMissed != null) put("lastMissed", JSONObject().put("x", lastMissed.x.toDouble()).put("y", lastMissed.y.toDouble())) }
             .apply { if (area != null) put("area", area) }
+            .apply { if (placement != null) put("placement", placement) }
             .toString()
     }
 }
 
 /** The app version without depending on generated BuildConfig in unit tests. */
 object BuildConfigInfo {
-    const val VERSION_NAME = "0.8.0"
+    const val VERSION_NAME = "0.9.0"
 }
