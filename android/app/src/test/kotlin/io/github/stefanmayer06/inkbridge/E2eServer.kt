@@ -53,6 +53,8 @@ object E2eServer {
                 .put("ui", state?.ui ?: 0)
                 .put("uiDone", state?.uiDone ?: JSONObject.NULL)
                 .put("missed", strokes.missed)
+                .put("drawn", strokes.drawn)
+                .put("app", state?.app ?: JSONObject.NULL)
                 .put("win", state?.win?.let { JSONArray(listOf(it.x.toDouble(), it.y.toDouble())) } ?: JSONObject.NULL)
             if (req != null) {
                 o.put("limit", arr(req.limit))
@@ -78,14 +80,15 @@ object E2eServer {
                         val s = BridgeState.parse(text)
                         if (s != null) {
                             state = s
-                            // as the Bridge: placed from Obsidian's window when its events say where that is, else by its size
+                            // as the Bridge: placed from Obsidian's window by its size when that fits one layout,
+                            // else from the screen positions in its events
                             val win = s.win
-                            val vp = s.vp
-                            if (win != null) {
+                            val bySize = s.vp?.let { windowFromViewport(it, s.dpr, bars) }
+                            if (bySize != null) {
+                                cal.placeFromWindow(bySize.first, bySize.second - overlayTop, "size")
+                            } else if (win != null) {
                                 val (x, y) = windowOffset(win, s.dpr, 0, overlayTop)
                                 cal.placeFromWindow(x, y, "events")
-                            } else if (vp != null) {
-                                windowFromViewport(vp, s.dpr, bars)?.let { (x, y) -> cal.placeFromWindow(x, y - overlayTop, "size") }
                             }
                             val req = firmwareRequest(s, cal, w, h, System.currentTimeMillis())
                             for (d in s.allDowns) {
@@ -110,7 +113,11 @@ object E2eServer {
         Thread {
             while (true) {
                 Thread.sleep(50)
-                synchronized(lock) { if (strokes.check(System.currentTimeMillis()).isNotEmpty()) report() }
+                synchronized(lock) {
+                    val drawnBefore = strokes.drawn
+                    // a stroke decided either way is news
+                    if (strokes.check(System.currentTimeMillis()).isNotEmpty() || strokes.drawn != drawnBefore) report()
+                }
             }
         }.apply { isDaemon = true }.start()
         println("e2e bridge listening on 127.0.0.1:$port")

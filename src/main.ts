@@ -83,6 +83,8 @@ export default class InkNotebookPlugin extends Plugin {
     this.bookmarks = new BookmarkManager(this);
     this.switcher = new PageSwitcher(this);
     this.fastInk = new FastInkBridge(this, () => this.app.workspace.getActiveViewOfType(InkView));
+    // this plugin is older than the Bridge app goes with: say so, and how to update (it stays until tapped)
+    this.fastInk.onOutdated = (message) => new Notice(`Ink Notebook: ${message}`, 0);
     this.fastInk.start();
     const refreshStatus = debounce(
       () => {

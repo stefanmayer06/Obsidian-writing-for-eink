@@ -16,6 +16,7 @@ import {
   type FastInkViewport,
   type FastInkWindow,
 } from "../core/fastInk";
+import { BUILD_ID, buildOf, compareBuilds } from "../core/build";
 import type { InkSurface } from "../ink/surface";
 import { currentDevice } from "./einkMode";
 
@@ -271,6 +272,15 @@ export class FastInkBridge {
   onPage: { at: number; armed: boolean; reason: string | null; strokes: number; bridgeDrew: boolean } | null = null;
   /** Called when the connection or the Bridge's status changes (the settings tab shows it). */
   onChange: (() => void) | null = null;
+  /**
+   * How this plugin stands to the one the Bridge app carries: the two are built together, and instant
+   * ink needs them to match. "restart": the Bridge has already put its build into the vault, Obsidian
+   * still runs the old one.
+   */
+  pairing: "unknown" | "same" | "older" | "restart" | "newer" = "unknown";
+  private pairingChecked: string | null = null;
+  /** Says what to do about a plugin older than the Bridge (set by the plugin: a notice). */
+  onOutdated: ((message: string) => void) | null = null;
 
   constructor(
     private plugin: InkNotebookPlugin,
@@ -316,9 +326,14 @@ export class FastInkBridge {
     return this.socketResult;
   }
 
-  private get dir(): string {
+  /** This plugin's folder in the vault. */
+  private get pluginDir(): string {
     const m = this.plugin.manifest;
-    return `${m.dir ?? `${this.plugin.app.vault.configDir}/plugins/${m.id}`}/bridge`;
+    return m.dir ?? `${this.plugin.app.vault.configDir}/plugins/${m.id}`;
+  }
+
+  private get dir(): string {
+    return `${this.pluginDir}/bridge`;
   }
 
   start(): void {
@@ -601,7 +616,8 @@ export class FastInkBridge {
       clear: this.clearCount,
       ui: this.uiCount,
       uiDone: this.uiDone,
-      app: this.plugin.manifest.version,
+      // the version and the build: the Bridge carries the build it goes with and compares
+      app: `${this.plugin.manifest.version}+${BUILD_ID}`,
       downs: this.recentDowns(now),
     });
     const unchanged = sameRequest(this.sent, msg);
@@ -712,9 +728,49 @@ export class FastInkBridge {
     this.bridgeStatus = s;
     this.statusVia = via;
     if (s.armed && this.sent?.armed && this.onPage?.armed) this.onPage.bridgeDrew = true;
+    if (s.pluginBuild && s.pluginBuild !== this.pairingChecked) void this.checkPairing(s.pluginBuild);
     // the Bridge just appeared: tell it about the page now
     if (!wasSeen && this.bridgeSeen()) this.update();
     if (before !== this.connection || calibratedBefore !== s.calibrated) this.onChange?.();
+  }
+
+  /**
+   * The Bridge app carries the build of this plugin it was made with. When that is newer than the one
+   * running, instant ink misbehaves in ways that look like bugs (the Bridge waits for things this
+   * plugin does not send), so say so – once per build – and how to fix it.
+   */
+  private async checkPairing(bridgeBuild: string): Promise<void> {
+    this.pairingChecked = bridgeBuild;
+    const before = this.pairing;
+    const how = BUILD_ID === "dev" ? "unknown" : compareBuilds(BUILD_ID, bridgeBuild);
+    if (how === "same" || how === "newer" || how === "unknown") {
+      this.pairing = how;
+    } else {
+      // the Bridge may already have put its build into the vault: then only a restart is missing
+      let onDisk: string | null = null;
+      try {
+        onDisk = buildOf(await this.plugin.app.vault.adapter.read(`${this.pluginDir}/main.js`));
+      } catch {
+        // not readable: treat as not updated
+      }
+      this.pairing = onDisk === bridgeBuild ? "restart" : "older";
+      this.onOutdated?.(this.pairingAdvice(bridgeBuild));
+    }
+    if (before !== this.pairing) this.onChange?.();
+  }
+
+  /** What to do when this plugin is not the build the Bridge goes with, in words ("" when nothing). */
+  pairingAdvice(bridgeBuild = this.bridgeStatus?.pluginBuild ?? ""): string {
+    switch (this.pairing) {
+      case "restart":
+        return `Ink Notebook was updated by the Bridge app (build ${bridgeBuild}), but Obsidian is still running the old one (${BUILD_ID}). Restart Obsidian: close it in the app switcher and open it again.`;
+      case "older":
+        return `This Ink Notebook (build ${BUILD_ID}) is older than the Bridge app goes with (${bridgeBuild}), so instant ink will not work properly. Open the Ink Notebook Bridge app, tap “Update Ink Notebook in the vault”, then restart Obsidian.`;
+      case "newer":
+        return `The Bridge app is older than this Ink Notebook (it goes with build ${bridgeBuild}, this is ${BUILD_ID}): install the newer Ink Notebook Bridge app.`;
+      default:
+        return "";
+    }
   }
 
   // ------------------------------------------------------------------ socket

@@ -32,6 +32,14 @@ import java.io.File
 class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var steps: LinearLayout
+    /** Whether the Ink Notebook in the vault is the one this app goes with, and the button to make it so. */
+    private lateinit var pluginBox: LinearLayout
+    /** What the last update of the vault's plugin did (shown until the screen is left). */
+    private var pluginMessage: String? = null
+    private var pluginBusy = false
+    private var ticks = 0
+    /** The vaults' bridge folders found when the screen last looked (looking walks the storage: not every second). */
+    @Volatile private var foundDirs: List<File> = emptyList()
     private lateinit var status: TextView
     private lateinit var vaults: TextView
     private lateinit var startStop: Button
@@ -40,6 +48,8 @@ class MainActivity : Activity() {
     private val tick = object : Runnable {
         override fun run() {
             refresh()
+            // the vault's plugin: looked at now and then (it changes when Obsidian or this app updates it)
+            if (ticks++ % 3 == 0) refreshPlugin()
             handler.postDelayed(this, 1000)
         }
     }
@@ -63,6 +73,8 @@ class MainActivity : Activity() {
         if (!Build.MANUFACTURER.contains("onyx", ignoreCase = true)) {
             col.addView(text("This does not look like an Onyx Boox tablet (${Build.MANUFACTURER} ${Build.MODEL}). The Bridge needs the Boox firmware.", 16f, bold = true))
         }
+        pluginBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(pluginBox)
         steps = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         col.addView(steps)
         col.addView(text("Vaults", 20f, bold = true))
@@ -81,6 +93,7 @@ class MainActivity : Activity() {
             text(
                 "Each test turns the firmware drawing on over the whole screen for 30 seconds, without Obsidian. " +
                     "Write anywhere (on this screen too): the ink should follow the pen with no lag. " +
+                    "While a test runs the screen shows only the ink: the status below is from before it, and shows the test's counts when it ends. " +
                     "Test 1 is how instant ink works. Tests 2 and 3 try other ways for tablets where test 1 shows only hovers " +
                     "(during them, this window takes all touches for 30 seconds).",
                 15f,
@@ -182,6 +195,135 @@ class MainActivity : Activity() {
         if (!done) steps.addView(button("Allow") { action() })
     }
 
+    // ------------------------------------------------------------------ the plugin in the vault
+
+    /** What the top of the screen says about one vault's plugin. */
+    private class PluginLine(val vault: String, val pluginDir: File, val installed: PluginBundle.Installed, val match: PluginBundle.Match)
+
+    /**
+     * Whether the Ink Notebook in each vault is the build this app goes with. The two halves are built
+     * together; an older plugin with a newer Bridge misbehaves in ways that look like bugs, and nothing
+     * else makes the plugin follow (a test build keeps its version number). So the app says it at the
+     * top of its screen, and can put its own copy of the plugin into the vault.
+     */
+    private fun refreshPlugin() {
+        if (pluginBusy) return
+        val bundled = PluginBundle.bundled(this)
+        if (bundled == null || !canFiles()) {
+            pluginBox.removeAllViews()
+            pluginShown = null
+            return
+        }
+        // the vaults the running Bridge knows, else those this screen found: no walk through the storage here
+        val dirs = BridgeService.instance?.bridgeDirs?.takeIf { it.isNotEmpty() } ?: foundDirs
+        Thread {
+            val lines = dirs.mapNotNull { bridge ->
+                val dir = bridge.parentFile ?: return@mapNotNull null
+                val inst = PluginBundle.installed(dir)
+                PluginLine(vaultOf(bridge), dir, inst, PluginBundle.compare(inst, bundled))
+            }
+            runOnUiThread { showPlugin(bundled, lines) }
+        }.start()
+    }
+
+    /** What the plugin block last showed: it is built again only when that changes (no flashing, no lost taps). */
+    private var pluginShown: String? = null
+
+    private fun showPlugin(bundled: PluginBundle.Bundled, lines: List<PluginLine>) {
+        if (pluginBusy) return
+        val svc = BridgeService.instance
+        val running = svc?.pluginReported
+        val shows = listOf(
+            bundled, lines.map { "${it.vault}|${it.match}|${it.installed}" }, running, svc != null && svc.lastMessageAt > 0,
+            pluginMessage, svc?.pluginsUpdated, PluginBundle.keepsMatched(this),
+        ).toString()
+        if (shows == pluginShown && pluginBox.childCount > 0) return
+        pluginShown = shows
+        pluginBox.removeAllViews()
+        pluginBox.addView(text("Ink Notebook in Obsidian", 20f, bold = true))
+        val mine = "${bundled.version}, build ${bundled.build}"
+        var older = false
+        for (l in lines) {
+            val there = "${l.installed.version ?: "?"}, ${l.installed.build?.let { "build $it" } ?: "a build from before builds were named"}"
+            when (l.match) {
+                PluginBundle.Match.VAULT_OLDER -> {
+                    older = true
+                    pluginBox.addView(text("✗ Ink Notebook in ${l.vault} is older than this Bridge.", 17f, bold = true))
+                    pluginBox.addView(
+                        text(
+                            "In the vault: $there. This Bridge goes with: $mine. The two are made together and have to match: " +
+                                "with an older Ink Notebook, parts of the page get no instant ink.",
+                            15f,
+                        ),
+                    )
+                }
+                PluginBundle.Match.SAME -> {
+                    // what Obsidian last said it runs (an Ink Notebook from before builds were named says nothing)
+                    val heard = svc != null && svc.lastMessageAt > 0
+                    val runs = running?.second
+                    when {
+                        heard && runs != bundled.build -> {
+                            pluginBox.addView(text("✗ Ink Notebook in ${l.vault} is up to date, but Obsidian is still running the older one.", 17f, bold = true))
+                            pluginBox.addView(
+                                text(
+                                    "Restart Obsidian: close it in the app switcher (swipe it away) and open it again, then open an ink page. " +
+                                        "Running: ${running?.first ?: "Ink Notebook"}, ${runs?.let { "build $it" } ?: "a build from before builds were named"}. In the vault: $mine.",
+                                    15f,
+                                ),
+                            )
+                        }
+                        heard -> pluginBox.addView(text("✓ Ink Notebook in ${l.vault} matches this Bridge and is the one running ($mine).", 15f))
+                        else -> pluginBox.addView(text("✓ Ink Notebook in ${l.vault} matches this Bridge ($mine). Open an ink page in Obsidian to see here that it is the one running.", 15f))
+                    }
+                }
+                PluginBundle.Match.VAULT_NEWER ->
+                    pluginBox.addView(text("Ink Notebook in ${l.vault} ($there) is newer than this Bridge goes with ($mine): install the newer Bridge app.", 15f, bold = true))
+                else -> {}
+            }
+        }
+        if (lines.isEmpty()) pluginBox.addView(text("No vault with Ink Notebook found yet. This Bridge goes with Ink Notebook $mine.", 15f))
+        pluginMessage?.let { pluginBox.addView(text(it, 16f, bold = true)) }
+        svc?.pluginsUpdated?.takeIf { it.isNotEmpty() && pluginMessage == null }?.let { done ->
+            pluginBox.addView(text("Ink Notebook was updated in ${done.joinToString { v -> vaultOfPlugin(v) }} when the Bridge started. If Obsidian was open, restart it.", 15f))
+        }
+        if (older) {
+            pluginBox.addView(button("Update Ink Notebook in the vault") { updatePlugin(lines.filter { it.match == PluginBundle.Match.VAULT_OLDER }) })
+        }
+        if (PluginBundle.keepsMatched(this) || older) {
+            val on = PluginBundle.keepsMatched(this)
+            pluginBox.addView(
+                button(if (on) "Keeping Ink Notebook matched to the Bridge: on (tap to turn off)" else "Keeping Ink Notebook matched to the Bridge: off (tap to turn on)") {
+                    PluginBundle.setKeepMatched(this, !on)
+                    refreshPlugin()
+                },
+            )
+        }
+    }
+
+    /** Put this app's Ink Notebook into the vaults that have an older one; from then on the app keeps them matched. */
+    private fun updatePlugin(lines: List<PluginLine>) {
+        if (pluginBusy) return
+        pluginBusy = true
+        pluginMessage = "Updating Ink Notebook…"
+        pluginBox.addView(text("Updating Ink Notebook…", 16f, bold = true))
+        Thread {
+            val errors = lines.mapNotNull { l -> PluginBundle.install(this, l.pluginDir)?.let { "${l.vault}: $it" } }
+            runOnUiThread {
+                pluginBusy = false
+                pluginMessage = if (errors.isEmpty()) {
+                    PluginBundle.setKeepMatched(this, true)
+                    "Ink Notebook is updated in the vault. Now restart Obsidian: close it in the app switcher (swipe it away) and open it again."
+                } else {
+                    "Could not update Ink Notebook: ${errors.joinToString("; ")}. Is access to files allowed?"
+                }
+                refreshPlugin()
+            }
+        }.start()
+    }
+
+    /** `<vault>/.obsidian/plugins/ink-notebook` → `<vault>`. */
+    private fun vaultOfPlugin(pluginDir: File): String = pluginDir.parentFile?.parentFile?.parentFile?.path ?: pluginDir.path
+
     // ------------------------------------------------------------------ vaults
 
     private fun pickVault() {
@@ -202,7 +344,9 @@ class MainActivity : Activity() {
     private fun refreshVaults() {
         Thread {
             val found = if (canFiles()) Vaults.bridgeDirs(this) else emptyList()
+            foundDirs = found
             runOnUiThread {
+                refreshPlugin()
                 vaults.text = when {
                     !canFiles() -> "Allow access to files first."
                     found.isEmpty() -> "No vault with Ink Notebook found. Open an ink page in Obsidian once (it creates the folder), or add the vault folder."
@@ -262,7 +406,9 @@ class MainActivity : Activity() {
                         else -> "Last message from Ink Notebook ${ago}s ago."
                     },
                 )
-                svc.pluginVersion?.let { append(" Ink Notebook $it.") }
+                svc.pluginReported?.let { (version, build) ->
+                    append(" Ink Notebook $version, ${build?.let { "build $it" } ?: "a build from before builds were named"}.")
+                }
                 append("\n")
                 append(
                     when {
@@ -272,21 +418,23 @@ class MainActivity : Activity() {
                     },
                 )
                 append("\n")
-                append("Firmware pen reader: ${svc.penHovers} hover(s), ${svc.penStrokes} stroke(s) seen.")
-                if (svc.missedStrokes > 0) {
-                    val m = svc.lastMissed
-                    append("\nStrokes the firmware did not draw: ${svc.missedStrokes}")
-                    if (m != null) append(" (the last at x %.0f, y %.0f in Obsidian)".format(m.x, m.y))
-                    append(". Ink Notebook's own drawing showed them instead.")
-                }
-                if (svc.lateSwitchOns > 0) {
-                    append("\nStrokes begun just before the firmware was to draw again: ${svc.lateSwitchOns} (it waited for the pen-up; Ink Notebook's own drawing showed them).")
-                }
+                append("Firmware pen reader: ${svc.penHovers} hover(s), ${svc.penStrokes} stroke(s) since the Bridge started.")
+                svc.testCounts?.let { (h, n) -> append(" In the last test: $h hover(s), $n stroke(s).") }
                 if (svc.touchEvents > 0) append(" Pen events to the Bridge: ${svc.touchEvents}.")
-                append("\n")
-                append("Position: ${svc.placement}.")
-                append("\n")
-                append("Drawing area: ${svc.drawingArea}")
+                append("\n\nIn Obsidian (the last ink page)\n")
+                append("Position: ${svc.placement}.\n")
+                append("Page: ${svc.pageArea}.\n")
+                append("Strokes: ${svc.strokeCounts}.")
+                if (svc.missedStrokes > 0) append(" Ink Notebook's own drawing showed those the firmware did not draw.")
+                if (svc.lateSwitchOns > 0) {
+                    append("\nBegun just before the firmware was to draw again: ${svc.lateSwitchOns} (it waited for the pen-up; Ink Notebook's own drawing showed them).")
+                }
+                val log = svc.notDrawnLog
+                if (log.isNotEmpty()) {
+                    append("\nNot drawn by the firmware, newest first:")
+                    for (line in log) append("\n • $line")
+                }
+                append("\n\nThe firmware's area now: ${svc.drawingArea}")
                 svc.lastError?.let { append("\nProblem: $it") }
             }
         }

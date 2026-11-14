@@ -16,6 +16,19 @@ class StrokeCheckTest {
         assertTrue(c.check(1100).isEmpty())
         assertNull(c.nextCheckAt())
         assertEquals(0, c.missed)
+        assertEquals(1, c.drawn)
+    }
+
+    @Test
+    fun saysHowFarTheFirmwaresNearestPenDownWas() {
+        val c = StrokeCheck()
+        // none at all: the pen was outside what the firmware reads
+        assertNull(c.nearestFirmware(1000))
+        // one well before the plugin's time for the stroke: the plugin dated it late
+        c.firmwareDown(600)
+        c.firmwareDown(5000)
+        assertEquals(-400L, c.nearestFirmware(1000))
+        assertEquals(200L, c.nearestFirmware(4800))
     }
 
     @Test

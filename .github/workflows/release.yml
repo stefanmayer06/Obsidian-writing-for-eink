@@ -55,6 +55,8 @@ jobs:
           fi
       - run: npm test
       - run: npm run build
+      # build-id.txt names this build of the plugin (it is inside main.js too): the Bridge app carries
+      # these very files and tells by the name whether a vault has the same build
       - uses: actions/upload-artifact@v4
         with:
           name: ink-notebook
@@ -62,20 +64,34 @@ jobs:
             main.js
             manifest.json
             styles.css
+            build-id.txt
 
   # The Ink Notebook Bridge app (android/): instant ink on Boox tablets. Its APK goes with every release.
   # Signed with the key in the secrets BRIDGE_KEYSTORE_BASE64, BRIDGE_KEYSTORE_PASSWORD, BRIDGE_KEY_ALIAS and
   # BRIDGE_KEY_PASSWORD when they are set; otherwise with the fixed test key in android/app/test-signing.jks
   # (public, so that every test build still installs over the previous one).
+  #
+  # The app carries the plugin built by this same run (the two halves of instant ink have to match, and
+  # a test build keeps the plugin's version number, so nothing else makes the plugin in the vault follow
+  # the app): the plugin's files are put at the repository's root, where the Gradle build packs them.
   bridge:
+    needs: build
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.bridge-version.outputs.version }}
+      plugin-build: ${{ steps.plugin-build.outputs.id }}
     defaults:
       run:
         working-directory: android
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ink-notebook
+      - name: Plugin build
+        id: plugin-build
+        working-directory: .
+        run: echo "id=$(cat build-id.txt)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -100,6 +116,15 @@ jobs:
       - name: Bridge version
         id: bridge-version
         run: echo "version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
+      - name: The app must carry the plugin of this run
+        run: |
+          apk=app/build/outputs/apk/release/app-release.apk
+          for f in main.js manifest.json styles.css build-id.txt; do
+            if ! unzip -p "$apk" "assets/plugin/$f" | cmp -s - "../$f"; then
+              echo "::error::The Bridge APK does not carry this run's $f (assets/plugin/$f)."
+              exit 1
+            fi
+          done
       # also under a name with the version, so a download is never an old file of the same name
       - run: |
           cp app/build/outputs/apk/release/app-release.apk ink-notebook-bridge.apk
@@ -197,7 +222,9 @@ jobs:
 
             **Ink Notebook Bridge ${{ needs.bridge.outputs.version }}** (instant ink on Boox): `ink-notebook-bridge-${{ needs.bridge.outputs.version }}.apk` (the same file as `ink-notebook-bridge.apk`). It installs over earlier test builds of the Bridge.
 
-            Only those who choose it get it: install it with BRAT (*Settings → BRAT → Add beta plugin*, `${{ github.repository }}`, version `test-build`). Users of the released plugin – from Obsidian's community plugins or with BRAT's latest version – stay on the latest release.
+            **The Bridge app carries this build of the plugin** (build `${{ needs.bridge.outputs.plugin-build }}`). On a Boox, installing the APK is enough: open the Bridge app, tap **Update Ink Notebook in the vault**, then restart Obsidian. The app's screen and *Settings → Ink Notebook → Instant ink on Boox* show the build that is running; the two have to match. (BRAT does not fetch a new test build by itself: the tag and the version number stay the same.)
+
+            Without a Boox: install it with BRAT (*Settings → BRAT → Add beta plugin*, `${{ github.repository }}`, version `test-build`); to get a newer test build, remove the plugin in BRAT and add it again. Users of the released plugin – from Obsidian's community plugins or with BRAT's latest version – stay on the latest release.
 
             To go back, pick the latest release's version in BRAT the same way. Running the workflow again with "test build" replaces this build.
           files: |

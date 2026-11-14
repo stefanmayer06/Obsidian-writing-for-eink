@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { builtinModules } from "module";
+import { execFileSync } from "child_process";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -16,6 +17,28 @@ The license texts of Ink Notebook and of all third-party code in this file are a
 */`;
 
 const prod = process.argv[2] === "production";
+
+/**
+ * This build's name: the commit's date and time (UTC) and its short hash, e.g.
+ * 20261114-1840-0cb277b – or the time of the build and "+local" when files were
+ * changed since. It is in main.js (the settings show it), and the Ink Notebook
+ * Bridge app, which carries a copy of the plugin, compares it with the plugin in
+ * the vault: the two are built together and have to match. Builds sort by it.
+ */
+function buildId() {
+  if (process.env.INK_BUILD_ID) return process.env.INK_BUILD_ID;
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  const stamp = (d) => d.toISOString().replace(/[-:T]/g, "").replace(/^(\d{8})(\d{4}).*$/, "$1-$2");
+  try {
+    const sha = git("rev-parse", "--short=7", "HEAD");
+    const changed = git("status", "--porcelain", "--untracked-files=no") !== "";
+    const when = changed ? new Date() : new Date(Number(git("log", "-1", "--format=%ct")) * 1000);
+    return `${stamp(when)}-${sha}${changed ? "+local" : ""}`;
+  } catch {
+    return "dev";
+  }
+}
+const build = buildId();
 
 /**
  * The license texts for main.js: Ink Notebook's own and every npm package
@@ -73,11 +96,15 @@ const context = await esbuild.context({
   minify: prod,
   metafile: prod,
   outfile: "main.js",
+  // found again in main.js by this marker (src/core/build.ts, and the Bridge app's PluginBundle)
+  define: { __INK_BUILD__: JSON.stringify(`ink-notebook-build:${build}`) },
 });
 
 if (prod) {
   const result = await context.rebuild();
   fs.appendFileSync("main.js", licenseNotices(result.metafile));
+  // for the Bridge app's build, which packs this plugin build (android/app/build.gradle.kts)
+  fs.writeFileSync("build-id.txt", `${build}\n`);
   process.exit(0);
 } else {
   await context.watch();

@@ -12,8 +12,8 @@ android {
         // Android 9: the oldest Boox pen tablets still in use run 10
         minSdk = 28
         targetSdk = 34
-        versionCode = 11
-        versionName = "0.11.0"
+        versionCode = 12
+        versionName = "0.12.0"
         ndk {
             // Boox tablets are ARM; the SDK's native pen reader comes for these
             abiFilters += setOf("armeabi-v7a", "arm64-v8a")
@@ -83,6 +83,22 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
 }
+
+// The Ink Notebook plugin this Bridge goes with is packed into the app, so installing the app can
+// bring the plugin along (PluginBundle): the two halves are built together and have to match. It is
+// packed when the repository has a plugin build ("npm run build" at its root writes main.js and
+// build-id.txt); without one the app is built without it and offers no plugin.
+val pluginFiles = listOf("main.js", "manifest.json", "styles.css", "build-id.txt")
+val pluginAssets = layout.buildDirectory.dir("generated/plugin-assets")
+val packPlugin = tasks.register<Sync>("packPlugin") {
+    val repo = rootProject.projectDir.parentFile
+    val files = pluginFiles.map { File(repo, it) }
+    // all of it or nothing
+    if (files.all { it.isFile }) from(files)
+    into(pluginAssets.map { it.dir("plugin") })
+}
+android.sourceSets.getByName("main").assets.srcDir(pluginAssets)
+tasks.named("preBuild") { dependsOn(packPlugin) }
 
 // The unit test classpath, for running the Bridge without Android in the end-to-end test (dev/fastink-e2e.cjs)
 afterEvaluate {

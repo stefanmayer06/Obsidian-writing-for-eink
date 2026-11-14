@@ -130,6 +130,10 @@ export interface FastInkStatus {
   placement?: string;
   /** Strokes during which the firmware stayed off because the pen was already down when it was to draw again. */
   lateSwitchOns?: number;
+  /** The build of Ink Notebook the Bridge app carries (the one it was built with, which it can put into the vault). */
+  pluginBuild?: string;
+  /** What happened on the last ink page, in the Bridge's words (area, strokes drawn and not, and why). */
+  session?: string;
 }
 
 /** What the page looks like right now, measured by the view. */
@@ -400,6 +404,8 @@ export function parseStatus(text: string): FastInkStatus | null {
       area: typeof r.area === "string" ? r.area : undefined,
       placement: typeof r.placement === "string" ? r.placement : undefined,
       lateSwitchOns: typeof r.lateSwitchOns === "number" ? r.lateSwitchOns : undefined,
+      pluginBuild: typeof r.pluginBuild === "string" ? r.pluginBuild : undefined,
+      session: typeof r.session === "string" ? r.session : undefined,
     };
   } catch {
     return null;

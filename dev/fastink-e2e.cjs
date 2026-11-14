@@ -166,9 +166,10 @@ function startBridge() {
 
     // the pen only hovers over the page: that event shows where the window is on the screen
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 300, y: 400, pointerType: "pen", buttons: 0, force: 0 });
-    f = await waitFw((m) => m.source === "events");
-    check("…and from its events as soon as the pen hovers, in the same place", f?.source === "events" && same(f?.limit, limitFor(SCREEN_Y)), `${JSON.stringify(f?.limit)} vs ${JSON.stringify(limitFor(SCREEN_Y))}`);
-    check("…from the window position the plugin reported (24 CSS px down)", f?.win?.[1] === SCREEN_Y / DPR && f?.offset?.[1] === SCREEN_Y, JSON.stringify({ win: f?.win, offset: f?.offset }));
+    f = await waitFw((m) => !!m.win);
+    check("…and its events, once the pen hovers, say the same: nothing moves", f?.source === "size" && same(f?.limit, limitFor(SCREEN_Y)), `${JSON.stringify({ source: f?.source, limit: f?.limit })} vs ${JSON.stringify(limitFor(SCREEN_Y))}`);
+    check("…the window position from the events is 24 CSS px down, as its size said", f?.win?.[1] === SCREEN_Y / DPR && f?.offset?.[1] === SCREEN_Y, JSON.stringify({ win: f?.win, offset: f?.offset }));
+    check("the plugin names its version and build, for the Bridge to compare with the one it carries", f?.app === "harness+dev", JSON.stringify(f?.app));
     check(
       "…and the ink view around the page goes along (hovering there is not leaving the page)",
       !!f?.surface && f.surface[0] <= f.limit[0] && f.surface[1] <= f.limit[1] && f.surface[2] >= f.limit[2] && f.surface[3] >= f.limit[3],
@@ -315,7 +316,7 @@ function startBridge() {
     await pen(wave(150, 700));
     await page.waitForTimeout(300);
     check("writing on the page does not count as a press elsewhere", ((await last())?.ui ?? 0) === uiWriting, `${uiWriting} → ${(await last())?.ui}`);
-    check("…and the firmware drew it (no stroke missed)", ((await last())?.missed ?? -1) === 0, JSON.stringify((await last())?.missed));
+    check("…and the firmware drew it (no stroke missed)", ((await last())?.missed ?? -1) === 0 && ((await last())?.drawn ?? 0) >= 2, JSON.stringify({ missed: (await last())?.missed, drawn: (await last())?.drawn }));
 
     // a stroke in the grey around the page: no ink stays there, so the firmware does not draw there,
     // and that is not a missed stroke (no pause, no switch to Ink Notebook's own drawing)

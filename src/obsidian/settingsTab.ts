@@ -8,6 +8,7 @@ import { recognitionItems } from "./recognitionSettings";
 import { DAILY_INK_OPTIONS } from "../settings";
 import { dailyNoteSettings } from "./dailyNotes";
 import { BRIDGE_DOWNLOAD_URL, BRIDGE_START_URL } from "./fastInkBridge";
+import { BUILD_ID } from "../core/build";
 import { controlsByKey, folderValue, positiveInt, renderSettingItems, settingStore, type InkControl, type InkSetting, type InkSettingItem, type SettingStore } from "./settingItems";
 
 /**
@@ -89,7 +90,9 @@ export class InkSettingTab extends PluginSettingTab {
       case "connected": {
         const s = b.status;
         const via = b.transport === "socket" ? "direct connection" : "control file";
-        let text = `Connected to the Bridge app${s?.app ? ` ${s.app}` : ""} (${via}).`;
+        let text = `Connected to the Bridge app${s?.app ? ` ${s.app}` : ""} (${via}). Ink Notebook build ${BUILD_ID}`;
+        const advice = b.pairingAdvice();
+        text += advice ? `. ${advice}` : b.pairing === "same" ? " – the build the Bridge goes with." : ".";
         if (s?.placement) text += ` Page position on screen: ${s.placement}.`;
         else if (s && !s.calibrated) text += " The position on screen is measured from your first strokes.";
         if (s?.penStrokes !== undefined) text += ` The firmware's pen reader has reported ${s.penHovers ?? 0} hover(s) and ${s.penStrokes} stroke(s) to the Bridge.`;
@@ -100,6 +103,7 @@ export class InkSettingTab extends PluginSettingTab {
           if (s.area) text += ` Drawing area: ${s.area}.`;
         }
         if (s?.lateSwitchOns) text += ` ${s.lateSwitchOns} stroke(s) began just as the firmware was to draw again; it waited for the pen to lift, and Ink Notebook's own drawing showed them.`;
+        if (s?.session) text += ` Last ink page, by the Bridge: ${s.session}`;
         if (s?.error) text += ` Problem: ${s.error}`;
         return text;
       }
