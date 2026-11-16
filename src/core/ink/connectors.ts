@@ -6,9 +6,9 @@ import { makeStroke, pointCount, q, withStroke, type Page, type Selection, type 
 /**
  * Connectors for flowcharts: an arrow drawn from one shape to another is
  * attached to both (its `from` and `to`). When a shape moves, its connectors
- * follow: they are routed again from outline to outline – straight, or with
- * right angles (`elbow`). Labels (text boxes with a `container`) move with
- * their shape.
+ * follow: they are routed again from outline to outline – straight, with
+ * right angles (`elbow`), or with right angles rounded into a curve (`curve`).
+ * Labels (text boxes with a `container`) move with their shape.
  */
 
 /** Shapes a connector can attach to: anything that encloses an area (not areas, highlighters or connectors). */
@@ -162,6 +162,42 @@ export function elbowPath(s: Pt, ds: Dir, e: Pt, de: Dir): Pt[] {
   return tidy([s, ...mid, e]);
 }
 
+/**
+ * A smooth curve guided by the points: a B-spline, as Mermaid draws its links
+ * (d3's curveBasis). It starts at the first point heading for the second, ends
+ * at the last one coming from the one before, and rounds off every point in
+ * between (it passes near them, not through them); three or more points in a
+ * line stay a straight line. Drawn with straight pieces about `step` long.
+ */
+export function smoothPath(pts: ReadonlyArray<Pt>, step = 5): Pt[] {
+  const n = pts.length;
+  if (n < 3) return [...pts];
+  const out: Pt[] = [pts[0]];
+  const mix = (a: Pt, wa: number, b: Pt, wb: number, c?: Pt, wc = 0): Pt => {
+    const w = wa + wb + wc;
+    return { x: (a.x * wa + b.x * wb + (c ? c.x * wc : 0)) / w, y: (a.y * wa + b.y * wb + (c ? c.y * wc : 0)) / w };
+  };
+  const bezier = (c1: Pt, c2: Pt, end: Pt) => {
+    const p0 = out[out.length - 1];
+    const len = Math.hypot(c1.x - p0.x, c1.y - p0.y) + Math.hypot(c2.x - c1.x, c2.y - c1.y) + Math.hypot(end.x - c2.x, end.y - c2.y);
+    const k = Math.max(1, Math.min(32, Math.ceil(len / step)));
+    for (let i = 1; i <= k; i++) {
+      const t = i / k;
+      const u = 1 - t;
+      const a = u * u * u;
+      const b = 3 * u * u * t;
+      const c = 3 * u * t * t;
+      const d = t * t * t;
+      out.push({ x: a * p0.x + b * c1.x + c * c2.x + d * end.x, y: a * p0.y + b * c1.y + c * c2.y + d * end.y });
+    }
+  };
+  out.push(mix(pts[0], 5, pts[1], 1));
+  for (let i = 2; i < n; i++) bezier(mix(pts[i - 2], 2, pts[i - 1], 1), mix(pts[i - 2], 1, pts[i - 1], 2), mix(pts[i - 2], 1, pts[i - 1], 4, pts[i], 1));
+  bezier(mix(pts[n - 2], 2, pts[n - 1], 1), mix(pts[n - 2], 1, pts[n - 1], 2), mix(pts[n - 2], 1, pts[n - 1], 5));
+  out.push(pts[n - 1]);
+  return tidy(out);
+}
+
 /** Direction from a free end, at a right angle to `d`, pointing back toward `p`. */
 function across(d: Dir, from: Pt, p: Pt): Dir {
   return d.y === 0 ? { x: 0, y: sign(p.y - from.y) } : { x: sign(p.x - from.x), y: 0 };
@@ -174,9 +210,11 @@ function mainDir(a: Pt, b: Pt): Dir {
 
 /**
  * The points of a connector from `a` to `b`. An end attached to a shape starts
- * on the shape's outline; free ends stay where they are.
+ * on the shape's outline; free ends stay where they are. A `curve` is routed
+ * with right angles, which are then rounded off.
  */
-export function connectorPath(a: Pt, b: Pt, from: Stroke | null, to: Stroke | null, elbow: boolean, gap: number): Pt[] {
+export function connectorPath(a: Pt, b: Pt, from: Stroke | null, to: Stroke | null, elbow: boolean, gap: number, curve = false): Pt[] {
+  if (curve) return smoothPath(connectorPath(a, b, from, to, true, gap));
   const ca = from ? shapeCenter(from) : a;
   const cb = to ? shapeCenter(to) : b;
   if (!elbow) {
@@ -232,8 +270,14 @@ function endsOf(s: Stroke): { a: Pt; b: Pt } {
 const GAP = 2;
 
 /** A new connector (an arrow by default) from a to b, attached to the shapes given. */
-export function makeConnector(a: Pt, b: Pt, from: Stroke | null, to: Stroke | null, style: { color: string; width: number; elbow: boolean; arrow?: boolean; dash?: boolean }): Stroke {
-  const pts = connectorPath(a, b, from, to, style.elbow, GAP);
+export function makeConnector(
+  a: Pt,
+  b: Pt,
+  from: Stroke | null,
+  to: Stroke | null,
+  style: { color: string; width: number; elbow: boolean; curve?: boolean; arrow?: boolean; dash?: boolean },
+): Stroke {
+  const pts = connectorPath(a, b, from, to, style.elbow, GAP, style.curve);
   return makeStroke({
     pen: "ballpoint",
     color: style.color,
@@ -242,7 +286,8 @@ export function makeConnector(a: Pt, b: Pt, from: Stroke | null, to: Stroke | nu
     poly: true,
     arrow: style.arrow ?? true,
     dash: style.dash,
-    elbow: style.elbow,
+    elbow: style.elbow || style.curve,
+    curve: style.curve,
     from: from?.id,
     to: to?.id,
   });
@@ -256,7 +301,7 @@ export function rerouted(c: Stroke, shapeOf: (id: string) => Stroke | undefined)
   if (!from && !to) return c;
   const { a, b } = endsOf(c);
   // a straight connector with bends drawn by hand keeps only its ends
-  return withStroke(c, { pts: toPts(connectorPath(a, b, from, to, !!c.elbow, GAP)) });
+  return withStroke(c, { pts: toPts(connectorPath(a, b, from, to, !!c.elbow, GAP, !!c.curve)) });
 }
 
 /** Connectors attached to any of these shapes (that are not among them themselves). */

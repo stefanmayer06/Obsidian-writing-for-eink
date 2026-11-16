@@ -7,19 +7,30 @@ name: Build & release
 # manifest.json). Releases are made only from commits that are on main: a tag
 # on another commit, or "Run workflow" on another branch, fails the release job.
 # The released files get a build provenance attestation (gh attestation verify).
+#
+# Test builds: "Run workflow" on any branch with "test build" ticked publishes
+# that branch as a pre-release tagged test-build (replacing the previous one),
+# for testers who pick that version in BRAT. Nobody else gets it: Obsidian goes
+# by the manifest.json on main, which a test build does not change, and BRAT's
+# "latest" ranks releases by the version in their tag – a tag without digits
+# never ranks above a real version.
 on:
   push:
     branches: ["**"]
-    tags: ["*"]
+    tags: ["*", "!test-build"]
   pull_request:
   workflow_dispatch:
     inputs:
       release:
-        description: "Create a GitHub release for the version in manifest.json"
+        description: "Create a GitHub release for the version in manifest.json (from main only)"
         type: boolean
         default: true
+      test:
+        description: "Instead, publish a test build of this branch for BRAT (pre-release \"test-build\"; users of the released plugin do not get it)"
+        type: boolean
+        default: false
 
-# read-only by default; only the release job may write
+# read-only by default; only the release jobs may write
 permissions:
   contents: read
 
@@ -44,6 +55,8 @@ jobs:
           fi
       - run: npm test
       - run: npm run build
+      # build-id.txt names this build of the plugin (it is inside main.js too): the Bridge app carries
+      # these very files and tells by the name whether a vault has the same build
       - uses: actions/upload-artifact@v4
         with:
           name: ink-notebook
@@ -51,10 +64,79 @@ jobs:
             main.js
             manifest.json
             styles.css
+            build-id.txt
+
+  # The Ink Notebook Bridge app (android/): instant ink on Boox tablets. Its APK goes with every release.
+  # Signed with the key in the secrets BRIDGE_KEYSTORE_BASE64, BRIDGE_KEYSTORE_PASSWORD, BRIDGE_KEY_ALIAS and
+  # BRIDGE_KEY_PASSWORD when they are set; otherwise with the fixed test key in android/app/test-signing.jks
+  # (public, so that every test build still installs over the previous one).
+  #
+  # The app carries the plugin built by this same run (the two halves of instant ink have to match, and
+  # a test build keeps the plugin's version number, so nothing else makes the plugin in the vault follow
+  # the app): the plugin's files are put at the repository's root, where the Gradle build packs them.
+  bridge:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bridge-version.outputs.version }}
+      plugin-build: ${{ steps.plugin-build.outputs.id }}
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ink-notebook
+      - name: Plugin build
+        id: plugin-build
+        working-directory: .
+        run: echo "id=$(cat build-id.txt)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.BRIDGE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/bridge.jks"
+            echo "BRIDGE_KEYSTORE=$RUNNER_TEMP/bridge.jks" >> "$GITHUB_ENV"
+          else
+            echo "::notice::No BRIDGE_KEYSTORE_BASE64 secret: the Bridge APK is signed with the public test key (android/app/test-signing.jks)."
+          fi
+      - name: Test and build
+        env:
+          BRIDGE_KEYSTORE_PASSWORD: ${{ secrets.BRIDGE_KEYSTORE_PASSWORD }}
+          BRIDGE_KEY_ALIAS: ${{ secrets.BRIDGE_KEY_ALIAS }}
+          BRIDGE_KEY_PASSWORD: ${{ secrets.BRIDGE_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon testDebugUnitTest assembleRelease
+      - name: Bridge version
+        id: bridge-version
+        run: echo "version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
+      - name: The app must carry the plugin of this run
+        run: |
+          apk=app/build/outputs/apk/release/app-release.apk
+          for f in main.js manifest.json styles.css build-id.txt; do
+            if ! unzip -p "$apk" "assets/plugin/$f" | cmp -s - "../$f"; then
+              echo "::error::The Bridge APK does not carry this run's $f (assets/plugin/$f)."
+              exit 1
+            fi
+          done
+      # also under a name with the version, so a download is never an old file of the same name
+      - run: |
+          cp app/build/outputs/apk/release/app-release.apk ink-notebook-bridge.apk
+          cp app/build/outputs/apk/release/app-release.apk "ink-notebook-bridge-${{ steps.bridge-version.outputs.version }}.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ink-notebook-bridge
+          path: android/ink-notebook-bridge*.apk
 
   release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.release)
+    needs: [build, bridge]
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.release && !inputs.test)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -76,6 +158,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: ink-notebook
+      - uses: actions/download-artifact@v4
+        with:
+          name: ink-notebook-bridge
 
       - name: Attest the released files
         uses: actions/attest@v4
@@ -84,6 +169,7 @@ jobs:
             main.js
             manifest.json
             styles.css
+            ink-notebook-bridge.apk
 
       - name: Read version
         id: version
@@ -100,3 +186,49 @@ jobs:
             main.js
             manifest.json
             styles.css
+            ink-notebook-bridge*.apk
+
+  test-build:
+    needs: [build, bridge]
+    if: github.event_name == 'workflow_dispatch' && inputs.test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # no digits: BRAT reads a version out of a tag, and one without any never counts as newer than a real release
+      TAG: test-build
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ink-notebook
+      - uses: actions/download-artifact@v4
+        with:
+          name: ink-notebook-bridge
+
+      - name: Replace the previous test build
+        run: gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+
+      - name: Publish the test build
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: test-build
+          name: Test build of ${{ github.ref_name }} – Ink Notebook Bridge ${{ needs.bridge.outputs.version }} (not a release)
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          make_latest: false
+          body: |
+            A test build of the branch `${{ github.ref_name }}` (${{ github.sha }}) – not a release, and not for general use.
+
+            **Ink Notebook Bridge ${{ needs.bridge.outputs.version }}** (instant ink on Boox): `ink-notebook-bridge-${{ needs.bridge.outputs.version }}.apk` (the same file as `ink-notebook-bridge.apk`). It installs over earlier test builds of the Bridge.
+
+            **The Bridge app carries this build of the plugin** (build `${{ needs.bridge.outputs.plugin-build }}`). On a Boox, installing the APK is enough: open the Bridge app, tap **Update Ink Notebook in the vault**, then restart Obsidian. The app's screen and *Settings → Ink Notebook → Instant ink on Boox* show the build that is running; the two have to match. (BRAT does not fetch a new test build by itself: the tag and the version number stay the same.)
+
+            Without a Boox: install it with BRAT (*Settings → BRAT → Add beta plugin*, `${{ github.repository }}`, version `test-build`); to get a newer test build, remove the plugin in BRAT and add it again. Users of the released plugin – from Obsidian's community plugins or with BRAT's latest version – stay on the latest release.
+
+            To go back, pick the latest release's version in BRAT the same way. Running the workflow again with "test build" replaces this build.
+          files: |
+            main.js
+            manifest.json
+            styles.css
+            ink-notebook-bridge*.apk

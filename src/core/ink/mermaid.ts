@@ -50,6 +50,22 @@ export interface MermaidNode {
 
 export type LinkStroke = "normal" | "dotted" | "thick" | "invisible";
 
+/**
+ * How links are drawn – Mermaid's `curve`: smooth curves (`basis`, Mermaid's
+ * default, and its other curves), right angles (`step`, `stepBefore`,
+ * `stepAfter`) or straight lines between the bends (`linear`).
+ */
+export type LinkCurve = "curve" | "step" | "linear";
+
+/** Mermaid's name of a curve as a LinkCurve (null when it is not one). */
+export function linkCurve(name: string | undefined): LinkCurve | null {
+  const n = name?.trim().replace(/^curve/i, "").toLowerCase();
+  if (!n || !/^[a-z]+$/.test(n)) return null;
+  if (n === "linear") return "linear";
+  if (n.startsWith("step")) return "step";
+  return "curve";
+}
+
 export interface MermaidEdge {
   from: string;
   to: string;
@@ -61,6 +77,8 @@ export interface MermaidEdge {
   /** Ranks the link spans at least (longer links: `--->`). */
   minlen: number;
   style: MermaidStyle;
+  /** Its own curve (`linkStyle … interpolate …`), when it has one. */
+  curve?: LinkCurve;
 }
 
 export interface MermaidSubgraph {
@@ -78,6 +96,8 @@ export interface MermaidFlowchart {
   dir: FlowDir;
   /** The title of the frontmatter. */
   title: string | null;
+  /** How the links are drawn (`curve` of the frontmatter's config or of an init directive; curves when not given). */
+  curve: LinkCurve;
   /** In the order they first appear. */
   nodes: Map<string, MermaidNode>;
   edges: MermaidEdge[];
@@ -171,13 +191,25 @@ export function removeMermaidBlock(text: string, index: number): string | null {
   return null;
 }
 
-function stripFrontmatter(text: string): { text: string; title: string | null } {
+function stripFrontmatter(text: string): { text: string; title: string | null; curve: LinkCurve | null } {
   const m = /^\s*---[ \t]*\n([\s\S]*?)\n[ \t]*---[ \t]*(?:\n|$)/.exec(text);
-  if (!m) return { text, title: null };
+  if (!m) return { text, title: null, curve: null };
   const t = /^[ \t]*title[ \t]*:[ \t]*(.+?)[ \t]*$/m.exec(m[1]);
   const title = t ? t[1].replace(/^(["'])(.*)\1$/, "$2").trim() || null : null;
+  // config: / flowchart: / curve: linear
+  const c = /^[ \t]*curve[ \t]*:[ \t]*["']?([A-Za-z]+)["']?[ \t]*(?:#.*)?$/m.exec(m[1]);
   // keep the lines, so that errors name the right line
-  return { text: m[0].replace(/[^\n]/g, "") + text.slice(m[0].length), title };
+  return { text: m[0].replace(/[^\n]/g, "") + text.slice(m[0].length), title, curve: linkCurve(c?.[1]) };
+}
+
+/** The curve of a directive: %%{init: {"flowchart": {"curve": "linear"}}}%% (the last one counts). */
+function directiveCurve(text: string): LinkCurve | null {
+  let out: LinkCurve | null = null;
+  for (const d of text.matchAll(/%%\{([\s\S]*?)\}%%/g)) {
+    const c = /["']?curve["']?\s*:\s*["']?([A-Za-z]+)/.exec(d[1]);
+    out = linkCurve(c?.[1]) ?? out;
+  }
+  return out;
 }
 
 /**
@@ -753,6 +785,7 @@ export function parseMermaid(code: string): MermaidFlowchart {
   const g: MermaidFlowchart = {
     dir: dirOf(hm[2]) ?? "TB",
     title: fm.title,
+    curve: directiveCurve(fm.text) ?? fm.curve ?? "curve",
     nodes: new Map(),
     edges: [],
     subgraphs: new Map(),
@@ -769,7 +802,7 @@ export function parseMermaid(code: string): MermaidFlowchart {
   const closed: OpenSubgraph[] = [];
   const nodeStyles: Array<{ id: string; style: MermaidStyle }> = [];
   const classAssign: Array<{ ids: string[]; classes: string[] }> = [];
-  const linkStyles: Array<{ which: "default" | number[]; style: MermaidStyle }> = [];
+  const linkStyles: Array<{ which: "default" | number[]; style: MermaidStyle; curve: LinkCurve | null }> = [];
   let autoId = 0;
 
   const touch = (ref: NodeRef) => {
@@ -842,9 +875,10 @@ export function parseMermaid(code: string): MermaidFlowchart {
       continue;
     }
     if ((m = /^linkStyle\s+(\S+)\s+(.+)$/.exec(t))) {
-      const style = parseStyle(m[2].replace(/^interpolate\s+\S+\s*/, ""));
+      const interpolate = /^interpolate\s+(\S+)\s*/.exec(m[2]);
+      const style = parseStyle(interpolate ? m[2].slice(interpolate[0].length) : m[2]);
       const which = m[1] === "default" ? ("default" as const) : m[1].split(",").map((x) => parseInt(x, 10)).filter((x) => Number.isInteger(x) && x >= 0);
-      linkStyles.push({ which, style });
+      linkStyles.push({ which, style, curve: linkCurve(interpolate?.[1]) });
       continue;
     }
     if (/^(click|accTitle|accDescr|title)\b/.test(t)) continue;
@@ -908,8 +942,17 @@ export function parseMermaid(code: string): MermaidFlowchart {
   }
   for (const l of linkStyles) {
     if (l.which === "default") {
-      for (const e of g.edges) e.style = { ...l.style, ...e.style };
-    } else for (const i of l.which) if (g.edges[i]) g.edges[i].style = { ...g.edges[i].style, ...l.style };
+      for (const e of g.edges) {
+        e.style = { ...l.style, ...e.style };
+        if (l.curve && !e.curve) e.curve = l.curve;
+      }
+    } else
+      for (const i of l.which) {
+        const e = g.edges[i];
+        if (!e) continue;
+        e.style = { ...e.style, ...l.style };
+        if (l.curve) e.curve = l.curve;
+      }
   }
   return g;
 }

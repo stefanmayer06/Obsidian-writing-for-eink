@@ -6,7 +6,7 @@ import { eraseFromStroke, strokeErase } from "../src/core/ink/erase";
 import { pointInPolygon, StrokeIndex, strokePointBounds } from "../src/core/ink/geom";
 import { shapeFromDrag } from "../src/core/ink/shapes";
 import { arrowHead, parseColor, strokeSegments } from "../src/core/ink/pens";
-import { connectorPath, elbowPath, followMoves, labelBox, makeConnector, shapeAt, withLabels } from "../src/core/ink/connectors";
+import { connectorPath, elbowPath, followMoves, labelBox, makeConnector, shapeAt, smoothPath, withLabels } from "../src/core/ink/connectors";
 import { itemsBounds, transformItems, translation } from "../src/core/ink/transform";
 import {
   addToLibraryFile,
@@ -83,11 +83,23 @@ describe("file format", () => {
     expect(a.area).toBe(true);
     expect(a.fillStyle).toBe("cross");
     expect(c.arrow && c.arrowStart && c.elbow).toBe(true);
+    expect(c.curve).toBeUndefined();
     expect(c.from).toBe(box.id);
     expect(c.to).toBeUndefined();
     expect(back.texts[0]).toMatchObject({ align: "center", container: box.id });
     // a second round gives the same file
     expect(serializeInkFile("", { doc: { pages: [back] }, meta: EMPTY_META })).toBe(text);
+  });
+
+  it("keeps curved connectors", () => {
+    const a = rect(0, 0, 100, 50);
+    const b = rect(300, 200, 100, 50);
+    const c = makeConnector({ x: 50, y: 25 }, { x: 350, y: 225 }, a, b, { color: "#000000", width: 2, elbow: true, curve: true });
+    expect(c.curve && c.elbow).toBe(true);
+    const back = parseInkFile(serializeInkFile("", { doc: { pages: [pageWith([a, b, c])] }, meta: EMPTY_META })).doc.pages[0].strokes[2];
+    expect(back.curve && back.elbow).toBe(true);
+    expect(back.from).toBe(a.id);
+    expect(back.to).toBe(b.id);
   });
 
   it("ignores stroke fields it does not know (written by a later version)", () => {
@@ -295,6 +307,42 @@ describe("connectors", () => {
       { x: 100, y: 0 },
       { x: 100, y: 80 },
     ]);
+  });
+
+  it("draws curves through the bends: a B-spline, as Mermaid draws its links", () => {
+    // in a line it stays a line
+    expect(smoothPath([{ x: 0, y: 0 }, { x: 0, y: 50 }, { x: 0, y: 100 }])).toEqual([
+      { x: 0, y: 0 },
+      { x: 0, y: 100 },
+    ]);
+    expect(smoothPath([{ x: 0, y: 0 }, { x: 10, y: 10 }])).toHaveLength(2);
+    const s = smoothPath([{ x: 0, y: 0 }, { x: 0, y: 40 }, { x: 200, y: 40 }, { x: 200, y: 80 }]);
+    // from the first point to the last, leaving and arriving upright, rounding the bends off
+    expect(s[0]).toEqual({ x: 0, y: 0 });
+    expect(s[s.length - 1]).toEqual({ x: 200, y: 80 });
+    const [p0, p1, q1, q0] = [s[0], s[1], s[s.length - 2], s[s.length - 1]];
+    expect(Math.abs(p1.x - p0.x)).toBeLessThan(0.1 * Math.abs(p1.y - p0.y));
+    expect(Math.abs(q0.x - q1.x)).toBeLessThan(0.1 * Math.abs(q0.y - q1.y));
+    expect(s.some((p) => Math.abs(p.x) < 1 && p.y > 39)).toBe(false);
+    expect(s.every((p, i) => i === 0 || p.y >= s[i - 1].y - 1e-9)).toBe(true);
+    // short pieces
+    for (let i = 1; i < s.length; i++) expect(Math.hypot(s[i].x - s[i - 1].x, s[i].y - s[i - 1].y)).toBeLessThan(12);
+  });
+
+  it("routes curved arrows like elbow arrows, with the bends rounded off, also when their shapes move", () => {
+    const pts = connectorPath({ x: 160, y: 130 }, { x: 460, y: 330 }, a, b, true, 2, true);
+    expect(pts[0]).toEqual({ x: 160, y: 163 });
+    expect(pts[pts.length - 1]).toEqual({ x: 460, y: 297 });
+    expect(pts.length).toBeGreaterThan(10);
+    expect(pts.some((p, i) => i > 0 && p.x !== pts[i - 1].x && p.y !== pts[i - 1].y)).toBe(true);
+    const c = makeConnector({ x: 160, y: 130 }, { x: 460, y: 330 }, a, b, { color: "#000000", width: 2, elbow: true, curve: true });
+    const movedB = transformItems({ strokes: [b], texts: [], images: [], links: [], figures: [] }, translation(-200, 100)).strokes[0];
+    const c1 = followMoves(pageWith([a, movedB, c]), new Set([b.id])).strokes[2];
+    expect(c1.curve).toBe(true);
+    const n = c1.pts.length / 3;
+    expect(n).toBeGreaterThan(10);
+    expect(c1.pts[(n - 1) * 3]).toBeCloseTo(260, 1);
+    expect(c1.pts[(n - 1) * 3 + 1]).toBeCloseTo(397, 1);
   });
 
   it("follows its shapes and lets go when moved away on its own", () => {

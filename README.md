@@ -2,12 +2,43 @@
 
 **Handwritten notebooks in Obsidian that feel like the Boox Notes app – made for e‑ink tablets such as the Onyx Boox Note Air.** Write with the pen on paper pages, flip to the **Text** page and read the same notes as Markdown: handwriting transcribed, drawings shown live, links working like everywhere else in Obsidian.
 
-Ink Notebook has its own pen engine. It draws every stroke the moment the pen moves – nothing is redrawn while you write – so it stays fast on e‑ink screens and on pages full of writing. There is nothing else to install.
+Ink Notebook is free, needs no account and works offline. It has its own pen engine that draws every stroke the moment the pen moves, so it stays fast on e‑ink screens and on pages full of writing – there is nothing else to install. On a Boox, the optional **Ink Notebook Bridge** app makes your writing appear with no lag at all, like in Boox Notes (beta – see [Instant ink on a Boox](#instant-ink-on-a-boox-beta)).
 
+▶ **[Watch the 40-second demo video](docs/ink-notebook-promo.mp4)**
+
+**Contents:** [Features](#features) · [What's new](#whats-new) · [Screenshots](#screenshots) · [Installation](#installation) · [Getting started](#getting-started) · [Writing](#writing--like-in-the-boox-notes-app) · [The text page](#the-text-page) · [PDFs and papers](#pdfs-and-pictures) · [On a Boox](#using-it-on-a-boox-note-air-tab-ultra-go-) · [Handwriting recognition](#setting-up-handwriting-recognition) · [Quick reference](#quick-reference) · [Settings](#settings) · [Troubleshooting](#troubleshooting) · [Privacy](#privacy-payments-and-network-use)
+
+## Features
+
+- **Write like on paper** – fountain pen, ballpoint, pencil, brush and calligraphy pen, a highlighter, three kinds of eraser, lasso, shapes, typed text and fill. Pressure sensitivity, palm rejection, hold to snap shapes and scribble to erase.
+- **Notebooks with pages** – turn pages with a swipe, see all pages at a glance, and choose the paper: blank, ruled, dotted, squared, graph, isometric, Cornell notes, checklist or music staff.
+- **Your handwriting as text** – flip to the text page and read your notes as Markdown, with headings, lists, tasks, tables and working `[[links]]`. Fix a word there and the fix stays.
+- **Drawings stay live** – sketches and diagrams show on the text page as figures that update when you change the drawing.
+- **Flowcharts and diagrams** – flowchart shapes with arrows that stay attached, Excalidraw libraries, and Mermaid diagrams turned into ink you can move, fill and relabel.
+- **PDFs and papers** – write on PDFs and pictures, import papers from arXiv, and export the annotated PDF or the whole notebook.
+- **Made for e‑ink** – a calm black-and-white look without animations, large touch targets, real colours on colour e‑ink screens, and instant ink on a Boox with the Bridge app.
+- **Plain files in your vault** – every page is two Markdown files, so it syncs with Obsidian Sync or any other sync and works with links, backlinks, properties and daily notes.
+
+## What's new
+
+**Coming in the next release** – already in the [test build](https://github.com/stefanmayer06/Obsidian-writing-for-eink/releases/tag/test-build):
+
+- **Instant ink on a Boox (beta).** The new Ink Notebook Bridge app lets the Boox firmware draw your writing straight onto the screen, as fast as in the Boox Notes app. See [Instant ink on a Boox](#instant-ink-on-a-boox-beta).
+- **Mermaid links as smooth curves.** Links in Mermaid diagrams are now drawn as curves, the way Mermaid draws them, and stay curved when you move a shape. Mermaid's `curve` setting gives you right angles or straight lines instead. Several links into one shape each get their own place on it, and labels no longer spill out of wide shapes.
+
+**2.3** – Mermaid flowcharts in the object library, turned into ink. Ink Notebook's settings show up in Obsidian's settings search (Obsidian 1.13 and newer). Handwriting recognition always uses your own free Azure key: the paid *Ink Notebook Cloud* option was removed.
+
+**2.2** – The **Fill** tool (solid, hatched or cross-hatched), flowchart shapes with arrows that stay attached, and Excalidraw object libraries.
+
+**2.1** – Name new pages and choose their folder, add an ink page to a note you already have, daily notes with an ink page, and *Match up the names of ink and text pages*. Writing is quicker on e‑ink, and colours and the highlighter draw cleanly on colour e‑ink screens.
+
+**2.0** – Ink Notebook's own pen engine (Excalidraw is no longer needed), and papers from arXiv.
+
+All versions: [releases](https://github.com/stefanmayer06/Obsidian-writing-for-eink/releases).
 
 ## Screenshots
 
-Taken in real Obsidian with this plugin (`e2e/scripts/screenshots.mjs`). The handwriting is generated from a single-stroke script font, and a local stand-in for Azure supplies the recognised words; everything else – the text page's headings, lists, tasks and links, the live figure, the pages, the PDF, the shapes – is the plugin at work. The arXiv list shows real results.
+Taken in Obsidian with Ink Notebook. (The handwriting was generated from a script font for these pictures.)
 
 | Ink page | Text page |
 | --- | --- |
@@ -19,7 +50,40 @@ Taken in real Obsidian with this plugin (`e2e/scripts/screenshots.mjs`). The han
 | **Papers from arXiv** | **Flowcharts, fills, object libraries** |
 | ![Papers from arXiv: the most popular papers, each with its authors, date, abstract and an Import button](docs/arxiv.png) | ![A flowchart from the object library: shapes with typed labels, attached arrows, a filled decision, a hatched box and a handwritten note](docs/flowchart.png) |
 | **Adding a Mermaid diagram** | **A Mermaid diagram on the page** |
-| ![The dialog: Mermaid code taken from a note, shown as ink, with its shapes and arrows counted](docs/mermaid-dialog.png) | ![A Mermaid flowchart placed as ink: a subgraph, coloured shapes with labels, elbow arrows, the Mermaid library next to it](docs/mermaid.png) |
+| ![The dialog: Mermaid code taken from a note, shown as ink, with its shapes and arrows counted](docs/mermaid-dialog.png) | ![A Mermaid flowchart placed as ink: a subgraph, coloured shapes with labels, attached arrows, the Mermaid library next to it](docs/mermaid.png) |
+
+## Installation
+
+You need **Obsidian 1.8.7 or newer** – on an e‑ink tablet, any other tablet, a phone or a computer. Nothing else.
+
+### From Obsidian (recommended)
+
+1. Open *Settings → Community plugins* (tap *Turn on community plugins* if Obsidian asks) and tap **Browse**.
+2. Search for **Ink Notebook**, tap **Install**, then **Enable**.
+
+### With BRAT (to try beta versions)
+
+1. Install and enable **BRAT** from *Community plugins → Browse*.
+2. *Settings → BRAT → Add beta plugin* and enter `stefanmayer06/Obsidian-writing-for-eink`.
+3. Enable **Ink Notebook** under *Community plugins*.
+
+### Manually
+
+1. Download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/stefanmayer06/Obsidian-writing-for-eink/releases/latest).
+2. Copy them to `<your vault>/.obsidian/plugins/ink-notebook/`.
+3. Restart Obsidian and enable **Ink Notebook**.
+
+### Coming from an earlier version?
+
+Versions up to 1.4 were built on Excalidraw. Run the command **Convert ink pages made with Excalidraw (earlier versions)**: every old ink page gets an ink notebook (`Name.ink.md`) next to it with the same pages, writing, shapes, text and pictures, and its text page is pointed at it (the next transcription updates the pictures on the text page). The old `.excalidraw.md` files are left as they are – delete them when you're happy.
+
+## Getting started
+
+1. **Run the setup assistant.** It opens the first time Ink Notebook starts and sets up e‑ink optimisations, how the pen behaves, handwriting recognition and your first page. You can open it again any time from the settings or with the command *Open setup assistant*.
+2. **Make a page.** Tap the pencil icon in the ribbon, run **New ink page**, or right-click a folder → *New ink page*. Type a name (the date and time is filled in for you) and choose the paper.
+3. **Write.** Use the pen; swipe with a finger to turn pages; tap the page number for all pages.
+4. **Flip to the text.** Tap **Text** in the toolbar to see your notes as Markdown. The **Ink** bookmark on the text page takes you back.
+5. **Turn handwriting into text** by [setting up handwriting recognition](#setting-up-handwriting-recognition) – it is free and takes about five minutes. Without it, the text page shows your handwriting as a picture.
 
 ## Writing – like in the Boox Notes app
 
@@ -34,7 +98,7 @@ The toolbar sits at the top (or bottom, left, right – see *More → View*). Ta
 | **Shapes** | Line, arrow, elbow arrow, dashed line, rectangle, ellipse, circle, triangle, diamond – drag to draw. New shapes can be filled. An arrow drawn from one shape to another **stays attached** to both |
 | **Fill** | Tap inside a shape – or inside any area closed by lines, like a box drawn with four strokes or a circle drawn with the pen – to fill it. Twelve colours, solid, hatched or cross-hatched; *Remove fills* takes a fill away. Fills stay underneath your writing |
 | **Text** | Tap the page and type; tap a text to change it. Tap inside a shape to give it a **label**, centred in the shape, that moves with it. Four sizes |
-| **Object library** | Flowchart shapes, **Mermaid diagrams** and the objects of **Excalidraw libraries**: tap one, then tap the page to put it there (see *Flowcharts and object libraries*) |
+| **Object library** | Flowchart shapes, **Mermaid diagrams** and the objects of **Excalidraw libraries**: tap one, then tap the page to put it there (see [Flowcharts and object libraries](#flowcharts-and-object-libraries)) |
 | **Insert** | Images (from the vault or the device), a link to a note (a tappable chip on the page), a text box, objects from the library, a Mermaid diagram, pages from a PDF, the pages of a paper from arXiv |
 | **Undo / Redo** | Unlimited while the page is open |
 
@@ -63,7 +127,7 @@ The **library** button in the toolbar (or *Insert → From the object library…
 
 - **Flowchart** – the usual flowchart symbols: process, decision, start/end, input/output, document, predefined process, database, manual input, preparation, manual operation, delay, display, connector, off-page connector, merge, extract and comment. They are drawn in the pen colour and thickness you have chosen, and with the fill chosen for shapes.
 - **Excalidraw libraries** – every `.excalidrawlib` file in your vault, and the library of the [Excalidraw plugin](https://github.com/zsviczian/obsidian-excalidraw-plugin) if you use it. Get more at [libraries.excalidraw.com](https://libraries.excalidraw.com): *Import from a link…* takes the link of a library's *Download* button (or its *Add to Excalidraw* link), *Import a library file…* a file you downloaded. Rectangles, ellipses, diamonds, lines, curves, arrows, pen drawings and text come over with their colours, fills, hatching, rounded corners and rotation; labels stay in their shapes and arrows stay attached. (Pictures in libraries are left out.)
-- **Mermaid** – your Mermaid diagrams, turned into ink (see *Mermaid diagrams* below).
+- **Mermaid** – your Mermaid diagrams, turned into ink (see [Mermaid diagrams](#mermaid-diagrams) below).
 - **My library** – lasso something on the page and tap **To library** to keep it. My library is an Excalidraw library too, so Excalidraw can use what you keep in it (and the trash button removes an item).
 
 Tap an object, then tap the page where it should go – as often as you like; choosing a tool stops. On a narrow screen the library folds away to its title while you place objects (tap it to open it again).
@@ -76,7 +140,8 @@ Flowcharts written in [Mermaid](https://mermaid.js.org/syntax/flowchart.html) �
 
 - **Add one** with *Add a Mermaid diagram…* at the bottom of the library (or *Insert → Mermaid diagram…*, or the command *Add a Mermaid diagram to the object library*). **Paste** the code (or type it), **Choose a file…** on the device (`.mmd`, `.mermaid`, a Markdown note, a text file) or pick a note **From the vault…** – a note with several diagrams lets you choose one. You see the diagram as ink while you type, and what is wrong (with the line) when it cannot be read. **Add to library**, and on an ink page it is ready to be placed: tap the page.
 - **From a note**: right-click inside a ```` ```mermaid ```` block → *Add this Mermaid diagram to the ink library* (or run the command with the cursor in it). It is named after the note. A `.mmd` or `.mermaid` file: right-click it → *Add to the ink object library*.
-- **On the page** every node is a shape with its label in it, every link an **elbow arrow attached to the shapes** at its ends – move a shape with the lasso and its arrows follow, tap into it with the Text tool to change the label, fill it, erase it, like any shape you drew. Subgraphs (also inside subgraphs) are boxes with their title, link labels sit beside their links, links that go back up go round the side. A whole diagram may fill most of the page (it is made smaller when it is bigger than that).
+- **On the page** every node is a shape with its label in it, and every link an **arrow attached to the shapes** at its ends, drawn as a smooth curve the way Mermaid draws it. Move a shape with the lasso and its arrows follow (and stay curved); tap into it with the Text tool to change the label; fill it or erase it like any shape you drew. Subgraphs (also inside subgraphs) are boxes with their title, link labels sit beside their links, links that go back up go round the side, several links into one shape each get a place of their own on it, and curves keep clear of the shapes, titles and labels they pass. A whole diagram may fill most of the page (it is made smaller when it is bigger than that).
+- **Curves, right angles or straight lines**: like in Mermaid, the `curve` setting decides – in the frontmatter (`config:` → `flowchart:` → `curve: stepAfter`), in an init directive (`%%{init: {"flowchart": {"curve": "linear"}}}%%`) or for single links (`linkStyle 2 interpolate step`). `step`, `stepBefore` and `stepAfter` give elbow arrows with right angles, `linear` straight lines; every other curve (`basis`, Mermaid's default, and the rest) a smooth curve.
 - **What is understood**: `flowchart`/`graph` with `TD`/`TB`/`BT`/`LR`/`RL` (and `direction` in subgraphs); the shapes `[rect]`, `(rounded)`, `([stadium])`, `[[subroutine]]`, `[(database)]`, `((circle))`, `(((double circle)))`, `>flag]`, `{decision}`, `{{hexagon}}`, `[/lean/]`, `[\lean\]`, `[/trapezoid\]`, `[\trapezoid/]` and `A@{ shape: … }`; links `-->`, `---`, `-.->`, `==>`, `<-->`, `--o`, `--x`, `~~~`, longer links (`--->`), labels (`-- yes -->`, `-->|yes|`), chains and `&`; labels with `"quotes"`, `<br/>`, Markdown strings and entities; `classDef`, `class`, `:::`, `style` and `linkStyle` colours (fill, stroke, text colour, line width, dashes); comments and frontmatter (`title:`). Other kinds of Mermaid diagrams (sequence, class, state, …) are not turned into ink yet.
 - **Where they are kept**: each diagram is a note with a ```` ```mermaid ```` block in the *Mermaid* folder of the library folder (`Ink libraries/Mermaid/`). Obsidian shows it as a Mermaid diagram too; change the note and the library item changes. The trash button on an item moves its note to the trash.
 
@@ -95,7 +160,7 @@ Flowcharts written in [Mermaid](https://mermaid.js.org/syntax/flowchart.html) �
 - **Export** (*More → Export*): the **annotated PDF** (the original PDF with your ink drawn on top as vectors – its text stays selectable), the **whole notebook as PDF** (paper, PDF pages, pictures, ink, all as vectors), or **this page as an image**.
 - **Annotate a picture** the same way (right-click an image).
 
-## Papers from arXiv
+### Papers from arXiv
 
 Find a paper and write on it, without leaving Obsidian:
 
@@ -107,7 +172,82 @@ The PDF is downloaded and becomes the pages of a new ink page – write, highlig
 
 From an ink page, *Insert → Pages of a paper from arXiv…* adds a paper's pages to that ink page instead.
 
-## Files
+## Using it on a Boox (Note Air, Tab Ultra, Go, …)
+
+1. Install **Obsidian** from the Play Store (enable Google Play in the Boox settings if needed), open your vault and install Ink Notebook as above.
+2. In Boox's **E-Ink Center** (long-press the Obsidian icon → *Optimize*): refresh mode **Fast** or **Balanced** for writing (**HD** if you mostly read). Ink Notebook's e‑ink optimisations (on automatically on Boox) make Obsidian pure black on white, without animations.
+3. Keep *Draw with a finger* off: then only the pen writes and your hand can rest on the screen.
+4. Write on ruled paper with normal letter size; recognition works best with words that don't touch the lines above and below.
+5. On colour screens (Note Air C, Tab Ultra C, Go Color) the ink colours and highlighters show in colour.
+
+### Instant ink on a Boox (beta)
+
+Any app's own drawing on an e‑ink screen lags a little behind the pen. Boox Notes avoids that because the Boox **firmware** draws the stroke straight onto the screen – and a plugin can't reach the firmware. The free **Ink Notebook Bridge** app can: it lets the firmware draw over your ink page, so your writing appears as fast as in Boox Notes. Ink Notebook still saves every stroke as always and shows its own drawing of it when you pause.
+
+> **Beta.** Instant ink is new and has been tried on a Boox Note Air 6C so far. Until the next release it is in the [test build](https://github.com/stefanmayer06/Obsidian-writing-for-eink/releases/tag/test-build): the Bridge app there brings the matching Ink Notebook with it (step 4). Feedback from other Boox models is very welcome – please [open an issue](https://github.com/stefanmayer06/Obsidian-writing-for-eink/issues).
+
+**Set it up**
+
+1. On the Boox, download `ink-notebook-bridge.apk` from the [releases](https://github.com/stefanmayer06/Obsidian-writing-for-eink/releases) and install it. If the launcher shows a snowflake on it, unfreeze it.
+2. Open **Ink Notebook Bridge** and allow **Display over other apps** and **Access to files** (it finds your vault through them). Keep your vault in the device storage, not in Obsidian's app storage.
+3. Tap **Start the Bridge**. It starts again by itself after the tablet restarts.
+4. If the app says *Ink Notebook in … is older than this Bridge*, tap **Update Ink Notebook in the vault**, then restart Obsidian (swipe it away in the app switcher and open it again). The app and the plugin are made together and have to be the same build. After the first time, the app keeps them matched by itself whenever it starts (you can turn that off in the app).
+5. Open an ink page and write. *Settings → Ink Notebook → Instant ink on Boox* says **Connected**.
+
+To check that instant ink works on your tablet without Obsidian, tap **Test 1** in the Bridge app: for 30 seconds the ink should follow the pen across the whole screen with no lag.
+
+**What to expect**
+
+- Instant ink is used for the **pens**, on the page itself. The highlighter, eraser, lasso, shapes and text work as before.
+- It never draws over the toolbar, the pen cards, Obsidian's menus or other apps, and it stops when you leave the ink page.
+- While the firmware draws, the rest of the screen updates more slowly. So it pauses the moment the pen goes to the toolbar (or you tap something, or turn the page) and carries on as soon as the pen is back over the page: tool changes and page turns show at once.
+- Where the firmware doesn't draw a stroke, Ink Notebook draws it itself, so nothing is ever lost.
+- The firmware draws its own version of the pen, so a stroke can change very slightly when Ink Notebook's drawing replaces it.
+- *Settings → Ink Notebook → Instant ink*: **Automatic** (on Boox tablets, once the Bridge app is running), **Always on** or **Off**. The settings also have **Start the Bridge** and **Get the app** buttons.
+
+## Setting up handwriting recognition
+
+Handwriting recognition is optional. Without it, the text page shows your handwriting as a picture (still with typed notes, links and drawings). It uses Azure AI Vision with your own key – the free tier is enough:
+
+1. Sign in at the [Azure portal](https://portal.azure.com) (a free account is enough).
+2. Open [**Create Computer Vision**](https://portal.azure.com/#create/Microsoft.CognitiveServicesComputerVision).
+   - *Region*: one close to you, e.g. **West Europe** or **East US**. (Image Analysis 4.0 is only offered in some regions; Ink Notebook falls back to Read 3.2 automatically.)
+   - *Pricing tier*: **Free F0** – 5,000 images per month, 20 per minute.
+3. After deployment open the resource → **Keys and Endpoint**. Copy the **Endpoint** and **KEY 1**.
+4. In Obsidian: *Settings → Ink Notebook → Handwriting recognition* (or the setup assistant), paste both and press **Test**.
+
+How many requests are used? One per *writing area* that changed since the last time (a page is split into areas so that writing in one corner does not re-send the whole page). Results are cached, so flipping back and forth costs nothing.
+
+Privacy: only your handwriting strokes are rendered and sent (black on white – never the PDF or paper background, never your typed text) to the Azure region you picked; Azure deletes them within 24 hours. The Azure key is stored in `.obsidian/plugins/ink-notebook/data.json` inside your vault – keep that in mind if you share your vault.
+
+## Quick reference
+
+| What | How |
+| --- | --- |
+| New page | Ribbon pencil icon, command **New ink page**, or right-click a folder → *New ink page*. Type its name (the date and time is filled in – keep it or type over it) and choose the paper; the dialog shows the folder – *Change…* puts the page elsewhere (or type the name of a new folder) |
+| Draw on a note you already have | Command **Add an ink page to this note**, or right-click the note (in the file list or the editor) → *Add an ink page*. The note keeps its text and becomes the text page; the transcript goes below its text |
+| Daily notes | *Settings → Pages → Daily notes*: new daily notes come with an ink page (optionally opened to write on). Command **Open today's daily note on the ink page** works with any setting |
+| Names that don't match | Command **Match up the names of ink and text pages** (e.g. `2026-10-27 (text).md` → `2026-10-27.md` with `Attachments/2026-10-27.ink.md`); it lists the renames first |
+| Flip ink ⇄ text | **Text** in the toolbar, the **Ink** bookmark on the text page, or command **Flip between ink and text page** |
+| Transcribe again | *More → Transcribe handwriting now* (normally this happens when you open the text page or leave the ink page) |
+| Start over | *More → Re-transcribe from scratch* discards edits made inside the transcript |
+| Side by side | *More → Open the text page side by side* |
+| Link pages | Write `[[Page name]]` by hand (it gets a link button after the next transcription), or *Insert → Link to a note* |
+| Tasks | Draw a small box in front of the line (`- [ ]`); tick or cross it when done (`- [x]`) |
+| Tables | Draw a line under the headings and lines between the columns, write in the cells |
+| Drawings | Draw anything – it is detected. To force: lasso → *Figure* |
+| Flowcharts | Library button → *Flowchart* → tap a shape, tap the page; draw arrows from shape to shape; text tool → tap a shape for its label |
+| Mermaid diagrams | Library button → *Add a Mermaid diagram…* (paste, file or note), or right-click a ```` ```mermaid ```` block → *Add this Mermaid diagram to the ink library*; then tap the page |
+| Fill | Fill tool → tap inside a shape or an area enclosed by lines; or lasso → *Fill* |
+| Excalidraw libraries | Library button → *Import from a link…* / *Import a library file…*; lasso → *To library* keeps your own |
+| Pages | `+` adds a page after this one, `‹ ›` or a swipe turns pages, the page number opens all pages, *More → Add a page…* chooses paper and position, *More → Paper of this page…* changes the paper |
+| Handwriting → typed text | Lasso the handwriting → **To text** |
+| Annotate a PDF | Right-click a PDF → *Annotate with Ink Notebook*; *More → Export* for the annotated PDF |
+| Read a paper | Ribbon graduation cap → search arXiv or pick a popular paper → **Import** |
+| Instant ink (Boox) | Install and start the Ink Notebook Bridge app; *Settings → Instant ink on Boox* shows whether it is connected |
+| Offline | Just keep working. Pages waiting for recognition show a small ◦ on **Text**; command **Transcribe pages waiting for a connection** retries immediately |
+
+## Where your notes are kept
 
 Each ink page is two normal files:
 
@@ -128,75 +268,7 @@ Each ink page is two normal files:
 - An ink page without a text page (e.g. one copied in from another vault) gets one with a right-click → *Create text page (Ink Notebook)*.
 - Object libraries live in `Ink libraries/` (see Settings): imported Excalidraw libraries, `My library.excalidrawlib`, and `Mermaid/` with one note per Mermaid diagram.
 
-## Installation
-
-You need **Obsidian 1.8.7+** – nothing else.
-
-### Option A – BRAT (easiest, also on the Boox)
-1. In Obsidian: *Settings → Community plugins → Browse*, install and enable **BRAT**.
-2. *Settings → BRAT → Add beta plugin* and enter `stefanmayer06/Obsidian-writing-for-eink`.
-3. Enable **Ink Notebook** under *Community plugins*.
-
-### Option B – manual
-1. Download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/stefanmayer06/Obsidian-writing-for-eink/releases).
-2. Copy them to `<your vault>/.obsidian/plugins/ink-notebook/`.
-3. Restart Obsidian and enable **Ink Notebook**.
-
-When Ink Notebook starts the first time, a **setup assistant** opens (reopen it from the settings or the command *Open setup assistant*): e‑ink optimisations, pen behaviour, handwriting recognition and your first page.
-
-### Coming from an earlier version?
-
-Earlier versions of Ink Notebook (up to 1.4) were built on Excalidraw. Run the command **Convert ink pages made with Excalidraw (earlier versions)**: every old ink page gets an ink notebook (`Name.ink.md`) next to it with the same pages, writing, shapes, text and pictures, and its text page is pointed at it (the next transcription updates the pictures on the text page). The old `.excalidraw.md` files are left as they are – delete them when you're happy.
-
-## Using it on a Boox (Note Air, Tab Ultra, Go, …)
-
-1. Install **Obsidian** from the Play Store (enable Google Play in the Boox settings if needed), open your vault and install Ink Notebook as above.
-2. In Boox's **E-Ink Center** (long-press the Obsidian icon → *Optimize*): refresh mode **Fast** or **Balanced** for writing (**HD** if you mostly read). Ink Notebook's e‑ink optimisations (on automatically on Boox) make Obsidian pure black on white, without animations.
-3. Keep *Draw with a finger* off: then only the pen writes and your hand can rest on the screen.
-4. Write on ruled paper with normal letter size; recognition works best with words that don't touch the lines above and below.
-5. On colour screens (Note Air C, Tab Ultra C, Go Color) the ink colours and highlighters show in colour.
-
-## Setting up handwriting recognition
-
-Handwriting recognition is optional. Without it, the text page shows your handwriting as a picture (still with typed notes, links and drawings). It uses Azure AI Vision with your own key – the free tier is enough:
-
-1. Sign in at the [Azure portal](https://portal.azure.com) (a free account is enough).
-2. Open [**Create Computer Vision**](https://portal.azure.com/#create/Microsoft.CognitiveServicesComputerVision).
-   - *Region*: one close to you, e.g. **West Europe** or **East US**. (Image Analysis 4.0 is only offered in some regions; Ink Notebook falls back to Read 3.2 automatically.)
-   - *Pricing tier*: **Free F0** – 5,000 images per month, 20 per minute.
-3. After deployment open the resource → **Keys and Endpoint**. Copy the **Endpoint** and **KEY 1**.
-4. In Obsidian: *Settings → Ink Notebook → Handwriting recognition* (or the setup assistant), paste both and press **Test**.
-
-How many requests are used? One per *writing area* that changed since the last time (a page is split into areas so that writing in one corner does not re-send the whole page). Results are cached, so flipping back and forth costs nothing.
-
-Privacy: only your handwriting strokes are rendered and sent (black on white – never the PDF or paper background, never your typed text) to the Azure region you picked; Azure deletes them within 24 hours. The Azure key is stored in `.obsidian/plugins/ink-notebook/data.json` inside your vault – keep that in mind if you share your vault.
-
-## Daily use
-
-| What | How |
-| --- | --- |
-| New page | Ribbon pencil icon, command **New ink page**, or right-click a folder → *New ink page*. Type its name (the date and time is filled in – keep it or type over it) and choose the paper; the dialog shows the folder – *Change…* puts the page elsewhere (or type the name of a new folder) |
-| Draw on a note you already have | Command **Add an ink page to this note**, or right-click the note (in the file list or the editor) → *Add an ink page*. The note keeps its text and becomes the text page; the transcript goes below its text |
-| Daily notes | *Settings → Pages → Daily notes*: new daily notes come with an ink page (optionally opened to write on). Command **Open today's daily note on the ink page** works with any setting |
-| Names that don't match | Command **Match up the names of ink and text pages** (e.g. `2026-10-27 (text).md` → `2026-10-27.md` with `Attachments/2026-10-27.ink.md`); it lists the renames first |
-| Flip ink ⇄ text | **Text** in the toolbar, the **Ink** bookmark on the text page, or command **Flip between ink and text page** |
-| Transcribe again | *More → Transcribe handwriting now* (normally this happens when you open the text page or leave the ink page) |
-| Start over | *More → Re-transcribe from scratch* discards edits made inside the transcript |
-| Side by side | *More → Open the text page side by side* |
-| Link pages | Write `[[Page name]]` by hand (it gets a link button after the next transcription), or *Insert → Link to a note* |
-| Tasks | Draw a small box in front of the line (`- [ ]`); tick or cross it when done (`- [x]`) |
-| Tables | Draw a line under the headings and lines between the columns, write in the cells |
-| Drawings | Draw anything – it is detected. To force: lasso → *Figure* |
-| Flowcharts | Library button → *Flowchart* → tap a shape, tap the page; draw arrows from shape to shape; text tool → tap a shape for its label |
-| Fill | Fill tool → tap inside a shape or an area enclosed by lines; or lasso → *Fill* |
-| Excalidraw libraries | Library button → *Import from a link…* / *Import a library file…*; lasso → *To library* keeps your own |
-| Pages | `+` adds a page after this one, `‹ ›` or a swipe turns pages, the page number opens all pages, *More → Add a page…* chooses paper and position, *More → Paper of this page…* changes the paper |
-| Handwriting → typed text | Lasso the handwriting → **To text** |
-| Annotate a PDF | Right-click a PDF → *Annotate with Ink Notebook*; *More → Export* for the annotated PDF |
-| Read a paper | Ribbon graduation cap → search arXiv or pick a popular paper → **Import** |
-| Offline | Just keep working. Pages waiting for recognition show a small ◦ on **Text**; command **Transcribe pages waiting for a connection** retries immediately |
-
-### The text page
+### Inside a text page
 
 ```markdown
 ---
@@ -214,62 +286,59 @@ The two `%% … %%` lines mark the transcript; in Live Preview they are shown as
 ## Settings
 
 - **Writing** – pen side button (erase, lasso, nothing), draw with a finger, pressure sensitivity, scribble to erase, snap shapes, swipe to turn pages, two/three-finger taps, whole page or page width, toolbar position, low-latency drawing (automatic: off on e-ink screens).
+- **Instant ink on Boox** – instant ink (automatic / always on / off), whether the Ink Notebook Bridge app is connected and which build of Ink Notebook is running, and buttons to start the Bridge or get the app.
 - **Pages** – where new pages go (folder of the current note, a fixed folder, or ask every time), the subfolder for ink files (`Attachments` by default; empty = next to the text page), paper for new pages and whether to choose it every time, ask for a name (on by default; off names pages with the date and time), open the text page in reading or editing view (or Obsidian's default), daily notes with an ink page (off / with an ink page / with an ink page opened to write on), match up the names of ink and text pages, keep names in sync on rename/move.
-- **Handwriting recognition** – Azure endpoint and key, API version, language hint, highlight uncertain words, transcribe while writing, how long to wait when flipping, requests per minute, clickable handwritten links, diagram detection sensitivity, offline queue and cache.
+- **Handwriting recognition** – Azure endpoint and key, API version, language hint, mark uncertain words, transcribe while writing, how long to wait when flipping, requests per minute, clickable handwritten links, diagram detection sensitivity, offline queue and cache.
 - **Display & e‑ink** – e‑ink optimisations (automatic / always on / off), large touch targets, position of the bookmarks on the text page.
 - **PDF annotation** – how many pages to import without asking, the folder for papers from arXiv (`Papers` by default).
-- **Object libraries** – the folder for imported libraries and *My library* (`Ink libraries` by default).
+- **Object libraries** – the folder for imported libraries, *My library* and Mermaid diagrams (`Ink libraries` by default).
 
 From Obsidian 1.13 on, Obsidian's settings search finds Ink Notebook's settings too.
 
 ## Troubleshooting
 
+**Writing and display**
+
 - **The page flickers while writing** – set *Settings → Ink Notebook → Low-latency drawing* to *Off*.
 - **Colours and the highlighter have a stripy pattern on a colour e-ink screen** (and look right while the side panel is open) – set *Low-latency drawing* to *Automatic* (it is then off on e-ink screens) or *Off*. If the device is not recognised as e-ink, set *E-ink optimisations* to *Always on* as well.
-- **Writing feels slow on the Boox** – set Obsidian's refresh mode to *Fast* or *Balanced* in the Boox E-Ink Center; avoid *HD* / *Regal* while writing.
+- **Writing feels slow on the Boox** – set Obsidian's refresh mode to *Fast* or *Balanced* in the Boox E-Ink Center; avoid *HD* / *Regal* while writing. For no lag at all, try [instant ink](#instant-ink-on-a-boox-beta).
+- **"Tap inside a shape or a closed area to fill it"** – the lines around the spot do not meet: close the gap (small gaps are bridged) or tap a smaller area. A fill that went too far is undone with *Undo*.
+- **An object from an Excalidraw library looks a little different** – Ink Notebook draws clean lines (not Excalidraw's sketchy ones) in its own font, and leaves out pictures, which libraries do not contain.
+
+**Instant ink on a Boox**
+
+- **Settings say "Not connected"** – check that the Bridge app is running (open it and tap *Start the Bridge*), that it may display over other apps and access files, and that your vault is in the device storage. The Bridge app lists the vaults it found; *Add a vault folder…* adds one it missed. Then open an ink page again.
+- **The Bridge app says Ink Notebook is older than the Bridge** – tap *Update Ink Notebook in the vault* and restart Obsidian. If it says Ink Notebook is *newer*, install the newer Bridge app.
+- **Some strokes still appear with the usual delay** – where the firmware does not draw a stroke, Ink Notebook draws it itself. The Bridge app's screen shows which strokes the firmware did not draw and why; please include that when you report a problem.
+
+**Handwriting recognition and the text page**
+
 - **Test connection fails** – 401 means a wrong key; 404 a wrong endpoint (copy it exactly from *Keys and Endpoint*); 429 means the free tier's 20 requests/minute were reached (it retries automatically).
 - **Something was shown as a picture instead of text** – that area was recognised as a drawing. Change *Diagram detection* to *Only clear drawings*, or write a little larger. Unrecognised handwriting is always shown as a picture rather than lost.
 - **A table is shown as a picture** – the lines of a table have to be long and fairly straight and cross each other (or nearly touch), and the writing in at least two cells has to be readable.
 - **A box in front of a line did not become a task** – the box has to be closed, about as high as the writing (up to about twice), right in front of the first word and empty or ticked.
 - **Text on the text page is wrong** – just correct it there; your correction stays.
-- **"Tap inside a shape or a closed area to fill it"** – the lines around the spot do not meet: close the gap (small gaps are bridged) or tap a smaller area. A fill that went too far is undone with *Undo*.
-- **An object from an Excalidraw library looks a little different** – Ink Notebook draws clean lines (not Excalidraw's sketchy ones) in its own font, and leaves out pictures, which libraries do not contain.
+
+**Files**
+
 - **"This note has text in it"** – the note has the `ink-notebook` property (which makes a note open as an ink page) but text instead of handwriting. Nothing is changed until you choose: *Keep the text and add an ink page* removes the property and gives the note its own ink page.
 - **A text page is called "Name (text)"** – its ink page had the name (earlier versions turned a note into an ink page when it was opened in a tab that showed an ink page). Run **Match up the names of ink and text pages**.
 - **"This ink page could not be opened"** – the file was changed in a way Ink Notebook does not understand. It is not touched; *Open as Markdown* to look at it (e.g. a sync conflict).
-- Developer console: `app.plugins.plugins["ink-notebook"].internals` exposes the recognition pipeline and the file reader for debugging.
 
-## How it works
+Still stuck, or found a bug? [Open an issue](https://github.com/stefanmayer06/Obsidian-writing-for-eink/issues) – say which device and Obsidian version you use.
 
-- **The pen engine** (`src/ink`) draws on one opaque canvas that always shows the page as it looks now. Each pen movement adds one curve piece, drawn straight onto it (with every coalesced/raw pointer event, and the low-latency `desynchronized` canvas except on e-ink screens, where Boox shows that canvas with the dither pattern of its fast refresh), so the cost per movement does not grow with the page. Erasing and moving redraw only the area that changed; neighbouring pages are rendered in the background so that turning pages is instant. A second canvas shows previews (highlighter, lasso, shapes, moved selections). Strokes keep their pressure and are drawn with the same code live, on redraw, in figures and in exports (as SVG paths – the PDF export uses them too), so they look the same everywhere.
-- **The file** (`core/ink/codec.ts`): a Markdown file whose ink data sits in a hidden `%% ```ink-data … ``` %%` block, one line per page and per stroke; points are delta-encoded integers (0.1 units, pressure in 1/255) in base64. Fills, connectors and the like follow a stroke's points as `key:value` words, which earlier versions skip (they show the stroke without its fill). Edits are immutable updates (undo keeps old versions; they share everything that did not change).
-- **Fills** (`core/ink/fill.ts`) are drawn in a pass of their own underneath the highlighter and the ink. The fill tool fills the smallest shape around the tap; when other lines divide it, or several strokes enclose the spot, the strokes are drawn into a grid, flood-filled from the tap and the outline is traced – that becomes an *area*, a stroke that is only a fill. Hatching is cut to the shape as plain lines, so it looks the same on the page, in figures and in the PDF.
-- **Flowcharts** (`core/ink/connectors.ts`): an arrow remembers the shapes it was drawn between and is routed again, outline to outline, when they move. **Object libraries** (`core/ink/excalidrawLib.ts`) are read and written in Excalidraw's `.excalidrawlib` format.
-- **Recognition**: strokes are grouped into writing areas, rendered black on white (without long straight lines such as table lines and underlines, which only confuse OCR) and sent to Azure; the returned word boxes are mapped back onto the strokes to separate handwriting from drawings. Drawings are clustered into diagrams, each with a diagram area stored in the ink page; the text page shows that area with an `ink-figure` block.
-- The transcript region stores a compact fingerprint of what was generated, which is how your corrections, deletions and additions are recognised and kept.
-
-## Development
-
-```bash
-npm install
-npm test          # unit tests (vitest)
-npm run build     # type-check + bundle main.js
-npm run harness   # the pen engine in a plain browser page, driven with real pen input (Playwright)
-```
-
-The pure logic (the ink model, file format, pens, erasers, shapes, OCR parsing, classification, layout, transcript merging, PDF maths) lives in `src/core` and is covered by unit tests; the pen engine and its toolbar (DOM only) are in `src/ink`; the Obsidian integration is in `src/obsidian`.
-
-**Releasing:** run `npm run set-version -- 2.4.0` (it updates `manifest.json`, `package.json`, `package-lock.json` and `versions.json`) and merge it into `main`, then on GitHub create a release with the tag `2.4.0` – just the version, without a "v" – on `main`, or open *Actions → Build & release → Run workflow* on `main`. Releases are made from `main` only: the release job stops if the tagged commit (or the branch it was run on) is not on `main`. The workflow runs the tests, builds and publishes the release with `main.js`, `manifest.json` and `styles.css` – which is what BRAT and manual installs download – each with a build provenance attestation (check one with `gh attestation verify main.js --repo stefanmayer06/Obsidian-writing-for-eink`). It publishes the `manifest.json` of the repository and stops if the tag is not its version, so a release always matches both its tag and the repository.
-
-`e2e/` contains end-to-end tests that run the plugin inside the real Obsidian desktop app, write on ink pages with real pen events and use a fake Azure server (see `e2e/README.md`).
-
-## Payments, accounts and network use
+## Privacy, payments and network use
 
 - **Payment:** none – Ink Notebook is free.
 - **Account:** none. Handwriting recognition uses your own Azure AI Vision resource (a free Azure account is enough).
 - **Network use:** Ink Notebook works offline. It connects to the internet only for handwriting recognition and, when you use *Papers from arXiv*, to find and download papers: it sends handwriting images to *your* Azure AI Vision resource. *Papers from arXiv* sends your search words to the arXiv API (export.arxiv.org), loads the list of popular papers from Hugging Face (huggingface.co) and downloads the PDF of a paper you import from arxiv.org – only when you open it or search; tapping a paper's arXiv id opens its page on arxiv.org in your browser. *Import from a link…* in the object library downloads the library from the link you paste (usually libraries.excalidraw.com); *Find libraries* opens libraries.excalidraw.com in your browser. There is no telemetry and no ads.
 - **Files in your vault:** Ink Notebook reads and writes files only in your vault, through Obsidian. It goes through the list of the vault's files to offer pictures, PDFs, notes and folders when you choose one; to find the ink pages (when a picture or PDF on them is renamed, for **Match up the names of ink and text pages** and for **Convert ink pages made with Excalidraw**); to find the `.excalidrawlib` libraries and the notes in the Mermaid folder of the object library; and to know which arXiv papers you imported before. Nothing of this leaves your device.
+- **Instant ink (Boox):** only when the Ink Notebook Bridge app runs on the same tablet: Ink Notebook tells it where the ink page is, over a connection to `127.0.0.1` (the tablet itself) or a small file in its plugin folder (`bridge/state.json`). Nothing leaves the device. The Bridge app can also update Ink Notebook's own files in the vault (`main.js`, `manifest.json`, `styles.css`) with the build it carries: when you tap *Update Ink Notebook in the vault* in it, and from then on when it starts, until you turn that off in the app. It never touches your notes or settings.
 - **Clipboard:** Ink Notebook reads the clipboard only when you tap **Paste** in *Add a Mermaid diagram*. Copy, cut and paste with the lasso on an ink page use its own clipboard, not the system's.
+
+## For developers
+
+Building, testing, releasing and how Ink Notebook works inside: [`docs/development.md`](docs/development.md). Diagrams of every flow: [`docs/architecture.md`](docs/architecture.md). The Bridge app: [`android/README.md`](android/README.md).
 
 ## License
 
@@ -277,4 +346,4 @@ Copyright (C) 2026 Stefan Mayer
 
 Ink Notebook is free software: you can redistribute it and/or modify it under the terms of the **GNU Affero General Public License** as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version (`AGPL-3.0-or-later`, see [`LICENSE`](LICENSE)). It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the license for details.
 
-Releases up to and including 1.1.0 were published under the MIT license and remain available under it. The license texts of Ink Notebook and of all third-party code in the released `main.js` (pdf-lib and the libraries it uses, lz-string) are appended to the end of that file.
+The Ink Notebook Bridge app is a separate program under the MIT license (see [`android/LICENSE`](android/LICENSE)). Releases of Ink Notebook up to and including 1.1.0 were published under the MIT license and remain available under it. The license texts of Ink Notebook and of all third-party code in the released `main.js` (pdf-lib and the libraries it uses, lz-string) are appended to the end of that file.

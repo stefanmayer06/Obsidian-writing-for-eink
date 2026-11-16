@@ -56,3 +56,9 @@ colours (libimagequant / pngquant).
 
 The pen engine can also be tested without Obsidian, in a plain Chromium page:
 `npm run harness` in the repo root (see `dev/`).
+
+## Promo video
+
+`promo/` records the footage of the 40-second promo video in the same setup
+(the real plugin in Obsidian's tablet layout, written on with pen events) and
+edits it into `docs/ink-notebook-promo.mp4` – see `promo/README.md`.

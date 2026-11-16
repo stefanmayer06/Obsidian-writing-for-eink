@@ -52,6 +52,13 @@ export interface Stroke {
   readonly to?: string;
   /** A connector with right angles (it is routed that way when its shapes move). */
   readonly elbow?: boolean;
+  /**
+   * A connector drawn as a smooth curve, as Mermaid draws its links: when its
+   * shapes move it is routed like an elbow connector and the bends are rounded
+   * into a curve. Set together with `elbow`, so that versions without curves
+   * route it with right angles.
+   */
+  readonly curve?: boolean;
 }
 
 export type TextAlign = "left" | "center" | "right";
@@ -190,7 +197,7 @@ export function qp(p: number): number {
   return Math.round(Math.min(1, Math.max(0, p)) * 255) / 255;
 }
 
-const OPTIONAL_STROKE_FIELDS = ["poly", "closed", "arrow", "arrowStart", "dash", "fill", "fillStyle", "area", "from", "to", "elbow"] as const;
+const OPTIONAL_STROKE_FIELDS = ["poly", "closed", "arrow", "arrowStart", "dash", "fill", "fillStyle", "area", "from", "to", "elbow", "curve"] as const;
 
 export function makeStroke(fields: Omit<Stroke, "id"> & { id?: string }): Stroke {
   const s: Stroke = { ...fields, id: fields.id ?? newId() };

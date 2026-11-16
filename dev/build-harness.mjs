@@ -5,6 +5,8 @@ await esbuild.build({
   format: "iife",
   target: "es2020",
   outfile: "dev/out/harness.js",
+  // instant ink (fastInkBridge) imports Platform from "obsidian"
+  alias: { obsidian: "./dev/obsidianStub.ts" },
   sourcemap: "inline",
   logLevel: "warning",
 });

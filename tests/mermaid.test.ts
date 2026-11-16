@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   cleanLabel,
+  linkCurve,
   looksLikeMermaid,
   mermaidBlockAt,
   mermaidBlocks,
@@ -12,7 +13,7 @@ import {
   removeMermaidBlock,
 } from "../src/core/ink/mermaid";
 import { layoutGraph, placeInOrder, type LayoutGraph } from "../src/core/ink/layered";
-import { cssColor, mermaidToItems, routeEdge } from "../src/core/ink/fromMermaid";
+import { approxTextWidth, cssColor, mermaidToItems, routeEdge } from "../src/core/ink/fromMermaid";
 import { closedOutline } from "../src/core/ink/fill";
 import { pointInPolygon, strokePointBounds } from "../src/core/ink/geom";
 import { followMoves, isConnectable } from "../src/core/ink/connectors";
@@ -63,6 +64,21 @@ function points(s: Stroke): Array<{ x: number; y: number }> {
   for (let i = 0; i + 2 < s.pts.length; i += 3) out.push({ x: s.pts[i], y: s.pts[i + 1] });
   return out;
 }
+
+/** The sharpest turn of a line between two of its pieces, in degrees. */
+function sharpest(pts: ReadonlyArray<{ x: number; y: number }>): number {
+  let worst = 0;
+  for (let i = 1; i + 1 < pts.length; i++) {
+    const a = Math.atan2(pts[i].y - pts[i - 1].y, pts[i].x - pts[i - 1].x);
+    const b = Math.atan2(pts[i + 1].y - pts[i].y, pts[i + 1].x - pts[i].x);
+    let d = Math.abs(b - a);
+    if (d > Math.PI) d = 2 * Math.PI - d;
+    worst = Math.max(worst, (d * 180) / Math.PI);
+  }
+  return worst;
+}
+
+const crosses = (pts: ReadonlyArray<{ x: number; y: number }>, r: Rect) => pts.some((p) => p.x > r.x && p.x < r.x + r.w && p.y > r.y && p.y < r.y + r.h);
 
 describe("Mermaid: reading flowcharts", () => {
   it("reads the diagram of the request: nodes, shapes, labels, links, nested subgraphs and classes", () => {
@@ -170,6 +186,28 @@ describe("Mermaid: reading flowcharts", () => {
     expect(g.subgraphs.get("subgraph-1")?.title).toBe("Only a title");
     expect(g.nodes.has("A")).toBe(false);
     expect(g.edges.find((e) => e.to === "A")?.from).toBe("x");
+  });
+
+  it("reads how links are drawn: Mermaid's curve, from the frontmatter, an init directive or linkStyle", () => {
+    expect(parseMermaid("flowchart TD\n  A --> B").curve).toBe("curve");
+    expect(parseMermaid("---\nconfig:\n  flowchart:\n    curve: stepAfter\n---\nflowchart TD\n  A --> B").curve).toBe("step");
+    expect(parseMermaid(`%%{init: {"flowchart": {"curve": "linear"}}}%%\nflowchart TD\n  A --> B`).curve).toBe("linear");
+    expect(parseMermaid("%%{ init: { 'flowchart': { 'curve': 'monotoneX' } } }%%\ngraph LR\n  A --> B").curve).toBe("curve");
+    const g = parseMermaid("flowchart TD\n  A --> B --> C\n  linkStyle 1 interpolate step stroke:#f00\n  linkStyle default interpolate linear");
+    expect(g.edges[0].curve).toBe("linear");
+    expect(g.edges[1].curve).toBe("step");
+    expect(g.edges[1].style.stroke).toBe("#f00");
+    expect(["basis", "bumpY", "cardinal", "curveCatmullRom", "natural", "step", "stepBefore", "linear", ""].map((n) => linkCurve(n))).toEqual([
+      "curve",
+      "curve",
+      "curve",
+      "curve",
+      "curve",
+      "step",
+      "step",
+      "linear",
+      null,
+    ]);
   });
 
   it("reads styles, classes, comments, frontmatter and statements on one line", () => {
@@ -302,6 +340,8 @@ describe("Mermaid as ink", () => {
     expect(shapes).toHaveLength(14 + 3);
     expect(arrows).toHaveLength(12);
     for (const a of arrows) {
+      expect(a.curve).toBe(true);
+      // versions without curves route it with right angles
       expect(a.elbow).toBe(true);
       expect(a.arrow).toBe(true);
       expect(shapes.some((s) => s.id === a.from)).toBe(true);
@@ -319,6 +359,8 @@ describe("Mermaid as ink", () => {
       expect(t.y).toBeGreaterThan(b.y);
       expect(t.y + t.h).toBeLessThan(b.y + b.h);
     }
+    // wide enough for the text as measured, with room to spare: it is not wrapped again when the diagram is scaled
+    for (const t of labels) for (const line of t.text.split("\n")) expect(approxTextWidth(line, t.size) * 1.03).toBeLessThan(t.w);
     expect(labels.find((t) => t.text === "More players?")).toBeDefined();
     expect(texts.find((t) => t.text === "Start up" && !t.container)).toBeDefined();
     expect(texts.find((t) => t.text === "yes")).toBeDefined();
@@ -358,13 +400,23 @@ describe("Mermaid as ink", () => {
     expect(inside(strokePointBounds(logger), strokePointBounds(su))).toBe(true);
   });
 
-  it("lays out without overlaps, and links run with right angles from outline to outline", () => {
+  it("lays out without overlaps, and links run as smooth curves from outline to outline", () => {
     const nodes = shapes.filter((s) => s.fill === "#ffffff" || s.fill === "#e1f5ee" || s.fill === "#eeedfe");
     expect(nodes).toHaveLength(14);
     for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) expect(overlap(strokePointBounds(nodes[i]), strokePointBounds(nodes[j]))).toBe(false);
+    const linkLabels = texts.filter((t) => !t.container && (t.text === "yes" || t.text === "no"));
+    expect(linkLabels).toHaveLength(2);
     for (const a of arrows) {
       const pts = points(a);
-      for (let i = 1; i < pts.length; i++) expect(Math.min(Math.abs(pts[i].x - pts[i - 1].x), Math.abs(pts[i].y - pts[i - 1].y))).toBeLessThan(0.11);
+      // no corners
+      expect(sharpest(pts)).toBeLessThan(30);
+      // not through other shapes, nor through the labels of links
+      for (const n of nodes) if (n.id !== a.from && n.id !== a.to) expect(crosses(pts, strokePointBounds(n))).toBe(false);
+      for (const t of linkLabels) expect(crosses(pts, t)).toBe(false);
+      // the arrow comes straight in (from above, or into a side)
+      const [p, q] = [pts[pts.length - 2], pts[pts.length - 1]];
+      const [dx, dy] = [Math.abs(q.x - p.x), Math.abs(q.y - p.y)];
+      expect(Math.min(dx, dy)).toBeLessThan(Math.max(dx, dy) * 0.2 + 0.11);
       // the ends are just outside their shapes, not inside them
       const from = shapes.find((s) => s.id === a.from) as Stroke;
       const to = shapes.find((s) => s.id === a.to) as Stroke;
@@ -386,13 +438,20 @@ describe("Mermaid as ink", () => {
     };
     const xs = ["Create player", "Add to board", "Create logger", "Logger creation flow", "Pass player", "Assign log", "Logger ready", "More players?", "Start game"].map(center);
     for (const x of xs) expect(Math.abs(x - xs[0])).toBeLessThan(1);
-    const yes = arrows.find((a) => texts.find((t) => t.container === a.to)?.text === "Create player" && points(a).length > 2) as Stroke;
+    const target = (a: Stroke) => texts.find((t) => t.container === a.to)?.text;
+    const yes = arrows.find((a) => target(a) === "Create player" && texts.find((t) => t.container === a.from)?.text === "More players?") as Stroke;
     const p = points(yes);
-    expect(p).toHaveLength(4);
-    // out of the diamond's side, into the stadium's side
-    expect(Math.abs(p[0].y - p[1].y)).toBeLessThan(0.11);
-    expect(Math.abs(p[2].y - p[3].y)).toBeLessThan(0.11);
-    expect(p[3].y).toBeLessThan(p[0].y);
+    // out of the diamond's side, round the side of what lies between, into the stadium's side
+    const first = p[0];
+    const last = p[p.length - 1];
+    expect(Math.abs(p[1].y - first.y)).toBeLessThan(Math.abs(p[1].x - first.x) * 0.2);
+    expect(Math.abs(last.y - p[p.length - 2].y)).toBeLessThan(Math.abs(last.x - p[p.length - 2].x) * 0.2);
+    expect(last.y).toBeLessThan(first.y);
+    // beside the logger creation flow, not through it
+    const flow = strokePointBounds(shapes.find((s) => s.fill === "#e7e7e7") as Stroke);
+    expect(Math.max(...p.map((x) => x.x))).toBeGreaterThan(flow.x + flow.w);
+    expect(crosses(p, flow)).toBe(false);
+    expect(sharpest(p)).toBeLessThan(30);
   });
 
   it("starts at (0, 0), can be copied, and its arrows follow their shapes", () => {
@@ -413,6 +472,10 @@ describe("Mermaid as ink", () => {
     const moved = transformItems({ strokes: [target], texts: [], images: [], links: [], figures: [] }, translation(300, 50)).strokes[0];
     const next = followMoves({ ...page, strokes: page.strokes.map((s) => (s.id === moved.id ? moved : s)) }, new Set([moved.id]));
     const arrow = next.strokes.find((s) => s.to === moved.id) as Stroke;
+    // still a curve
+    expect(arrow.curve).toBe(true);
+    expect(points(arrow).length).toBeGreaterThan(4);
+    expect(sharpest(points(arrow))).toBeLessThan(30);
     const end = points(arrow).pop() as { x: number; y: number };
     const b = strokePointBounds(moved);
     expect(end.x).toBeGreaterThan(b.x - 6);
@@ -499,6 +562,42 @@ describe("Mermaid as ink", () => {
     const dirs = mermaidToItems(cases[7][0]).items;
     const ys = ["a", "b", "c"].map((n) => dirs.texts.find((t) => t.text === n)?.y as number);
     expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(1);
+  });
+
+  it("draws links with right angles or straight lines when the diagram says so", () => {
+    const code = "flowchart TD\n  A --> B & C\n  B --> D\n  C --> D\n  D --> A";
+    const corners = (r: ReturnType<typeof mermaidToItems>) => r.items.strokes.filter((s) => s.from).map((s) => points(s));
+    const step = mermaidToItems(`---\nconfig:\n  flowchart:\n    curve: step\n---\n${code}`);
+    for (const s of step.items.strokes.filter((x) => x.from)) {
+      expect(s.elbow).toBe(true);
+      expect(s.curve).toBeUndefined();
+    }
+    for (const pts of corners(step)) for (let i = 1; i < pts.length; i++) expect(Math.min(Math.abs(pts[i].x - pts[i - 1].x), Math.abs(pts[i].y - pts[i - 1].y))).toBeLessThan(0.11);
+    const linear = mermaidToItems(`%%{init: {"flowchart": {"curve": "linear"}}}%%\n${code}`);
+    for (const s of linear.items.strokes.filter((x) => x.from)) expect(s.elbow || s.curve).toBeFalsy();
+    // B → D and C → D come in at a slant
+    expect(corners(linear).some((pts) => pts.some((p, i) => i > 0 && Math.abs(p.x - pts[i - 1].x) > 1 && Math.abs(p.y - pts[i - 1].y) > 1))).toBe(true);
+    // one link of its own
+    const one = mermaidToItems(`${code}\n  linkStyle 0 interpolate step`);
+    expect(one.items.strokes.filter((x) => x.from && x.curve)).toHaveLength(4);
+  });
+
+  it("gives links coming into one shape places of their own, in the order they come from", () => {
+    const r = mermaidToItems("flowchart TD\n  A --> D\n  B --> D\n  C --> D");
+    const label = (id: string) => r.items.texts.find((t) => t.text === id)?.container;
+    const d = r.items.strokes.find((s) => s.id === label("D")) as Stroke;
+    const ends = ["A", "B", "C"].map((n) => {
+      const a = r.items.strokes.find((s) => s.from === label(n) && s.to === d.id) as Stroke;
+      return points(a).pop() as { x: number; y: number };
+    });
+    expect(ends[0].x).toBeLessThan(ends[1].x - 10);
+    expect(ends[1].x).toBeLessThan(ends[2].x - 10);
+    const b = strokePointBounds(d);
+    for (const e of ends) {
+      expect(e.x).toBeGreaterThan(b.x);
+      expect(e.x).toBeLessThan(b.x + b.w);
+      expect(e.y).toBeLessThan(b.y);
+    }
   });
 
   it("reads CSS colours", () => {

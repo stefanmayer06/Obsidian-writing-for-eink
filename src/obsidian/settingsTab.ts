@@ -7,6 +7,8 @@ import { SetupWizard } from "./setupWizard";
 import { recognitionItems } from "./recognitionSettings";
 import { DAILY_INK_OPTIONS } from "../settings";
 import { dailyNoteSettings } from "./dailyNotes";
+import { BRIDGE_DOWNLOAD_URL, BRIDGE_START_URL } from "./fastInkBridge";
+import { BUILD_ID } from "../core/build";
 import { controlsByKey, folderValue, positiveInt, renderSettingItems, settingStore, type InkControl, type InkSetting, type InkSettingItem, type SettingStore } from "./settingItems";
 
 /**
@@ -45,6 +47,67 @@ export class InkSettingTab extends PluginSettingTab {
   /** Obsidian before 1.13. */
   display(): void {
     this.draw();
+  }
+
+  hide(): void {
+    this.plugin.fastInk.onChange = null;
+    super.hide();
+  }
+
+  /** Where instant ink stands, in words. */
+  private fastInkStatus(): string {
+    const b = this.plugin.fastInk;
+    const page = b.onPage;
+    let onPage = "";
+    if (page && b.connection !== "off") {
+      onPage = page.armed
+        ? ` On the ink page: instant ink was on – ${page.bridgeDrew ? "the Bridge was drawing" : "but the Bridge had not reported drawing"}, ${page.strokes} stroke(s) written since.`
+        : ` On the ink page: instant ink was off – ${page.reason ?? "unknown"}.`;
+    }
+    return this.fastInkConnection() + onPage;
+  }
+
+  private fastInkConnection(): string {
+    const b = this.plugin.fastInk;
+    switch (b.connection) {
+      case "off":
+        return this.plugin.settings.fastInk === "off"
+          ? "Off."
+          : "Not on this device: instant ink needs an Onyx Boox tablet (or choose “Always on” for another Android tablet with the Boox firmware).";
+      case "waiting": {
+        let text = "Not connected. Install the Bridge app on your Boox, allow it to display over other apps and to access files, start it, then open an ink page.";
+        const direct = b.lastDirectConnection;
+        if (direct === "failed") text += " Direct connection: refused (Obsidian blocks it, or the Bridge is not running) – the control file in the vault is used instead.";
+        else if (direct === "none") text += " Direct connection: not tried yet (it is tried while an ink page is open).";
+        const vault = b.vaultPath;
+        if (vault) {
+          text += b.vaultInAppStorage
+            ? ` Your vault is in Obsidian's app storage (${vault}), which the Bridge cannot read: it needs the direct connection, or move the vault to the device storage.`
+            : ` Vault: ${vault} (the Bridge looks for it there; it is listed in the Bridge app under Vaults).`;
+        }
+        return text;
+      }
+      case "connected": {
+        const s = b.status;
+        const via = b.transport === "socket" ? "direct connection" : "control file";
+        let text = `Connected to the Bridge app${s?.app ? ` ${s.app}` : ""} (${via}). Ink Notebook build ${BUILD_ID}`;
+        const advice = b.pairingAdvice();
+        text += advice ? `. ${advice}` : b.pairing === "same" ? " – the build the Bridge goes with." : ".";
+        if (s?.placement) text += ` Page position on screen: ${s.placement}.`;
+        else if (s && !s.calibrated) text += " The position on screen is measured from your first strokes.";
+        if (s?.penStrokes !== undefined) text += ` The firmware's pen reader has reported ${s.penHovers ?? 0} hover(s) and ${s.penStrokes} stroke(s) to the Bridge.`;
+        if (s?.armed && s.paused) text += ` Instant ink pauses while the pen is away from the page (now: ${s.paused}).`;
+        if (s?.missed) {
+          const at = s.lastMissed ? ` – the last at ${Math.round(s.lastMissed.x)}, ${Math.round(s.lastMissed.y)} in the window` : "";
+          text += ` ${s.missed} stroke(s) were outside the firmware's drawing area${at}; Ink Notebook's own drawing showed them instead.`;
+          if (s.area) text += ` Drawing area: ${s.area}.`;
+        }
+        if (s?.lateSwitchOns) text += ` ${s.lateSwitchOns} stroke(s) began just as the firmware was to draw again; it waited for the pen to lift, and Ink Notebook's own drawing showed them.`;
+        if (s?.session) text += ` Last ink page, by the Bridge: ${s.session}`;
+        if (s?.error) text += ` Problem: ${s.error}`;
+        return text;
+      }
+    }
   }
 
   private draw(): void {
@@ -104,6 +167,28 @@ export class InkSettingTab extends PluginSettingTab {
             name: "Low-latency drawing",
             desc: "Draws the ink straight to the screen. Automatic leaves it off on e-ink screens, where it can show colours and the highlighter with a stripy pattern. Turn it off if the page flickers on your device.",
             control: { type: "dropdown", key: "lowLatency", options: { auto: "Automatic", on: "Always on", off: "Off" }, after: apply },
+          },
+        ],
+      },
+      {
+        type: "group",
+        heading: "Instant ink on Boox",
+        items: [
+          {
+            name: "Instant ink",
+            desc: "With the Ink Notebook Bridge app, the Boox firmware draws your writing straight onto the screen – with no lag, like in the Boox Notes app – while Ink Notebook records the strokes as always. Automatic: on Boox tablets, once the Bridge app is running.",
+            aliases: ["Boox", "latency", "lag", "Bridge"],
+            control: { type: "dropdown", key: "fastInk", options: { auto: "Automatic", on: "Always on", off: "Off" }, after: () => this.refresh() },
+          },
+          {
+            name: "Ink Notebook Bridge app",
+            desc: this.fastInkStatus(),
+            render: (setting) => {
+              this.plugin.fastInk.onChange = () => this.refresh();
+              setting
+                .addButton((b) => b.setButtonText("Start the Bridge").onClick(() => window.open(BRIDGE_START_URL)))
+                .addButton((b) => b.setButtonText("Get the app").onClick(() => window.open(BRIDGE_DOWNLOAD_URL)));
+            },
           },
         ],
       },

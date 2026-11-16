@@ -185,6 +185,8 @@ class PenSession implements ToolSession {
       this.s.pageTransform(this.s.bctx);
       drawStroke(this.s.bctx, shape.stroke);
     }
+    // the hand-drawn line the firmware is showing (instant ink) gives way to the shape
+    this.s.host.inkDiscarded?.();
   }
 
   move(points: InputPt[]): void {
@@ -217,6 +219,7 @@ class PenSession implements ToolSession {
         let dirty: Rect | null = strokeBounds(stroke);
         for (const t of page.strokes) if (targets.has(t.id)) dirty = unionRect(dirty, strokeBounds(t));
         this.s.commitPage({ ...page, strokes: page.strokes.filter((t) => !targets.has(t.id)) }, dirty);
+        this.s.host.inkDiscarded?.();
         return;
       }
     }

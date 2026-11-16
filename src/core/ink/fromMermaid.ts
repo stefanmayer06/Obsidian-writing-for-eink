@@ -1,9 +1,10 @@
 import type { Pt, Rect } from "../geometry";
-import { attachPoint, labelBox, makeConnector, shapeCenter } from "./connectors";
+import { attachPoint, labelBox, makeConnector, shapeCenter, smoothPath } from "./connectors";
+import { closedOutline } from "./fill";
 import { parseColor } from "./pens";
-import { strokePointBounds } from "./geom";
-import { layoutGraph, type EdgeRoute, type FlowDirection, type Size } from "./layered";
-import { parseMermaid, type MermaidFlowchart, type MermaidStyle, type NodeShape } from "./mermaid";
+import { pointInPolygon, strokePointBounds } from "./geom";
+import { DEFAULT_LAYOUT, layoutGraph, placeInOrder, type EdgeRoute, type FlowDirection, type Size } from "./layered";
+import { parseMermaid, type LinkCurve, type MermaidFlowchart, type MermaidStyle, type NodeShape } from "./mermaid";
 import { makeStroke, newId, q, type Items, type Stroke, type TextBox } from "./model";
 import { ellipsePoints } from "./shapes";
 import { itemsBounds, transformItems, translation } from "./transform";
@@ -11,9 +12,10 @@ import { itemsBounds, transformItems, translation } from "./transform";
 /**
  * Mermaid flowcharts as ink: every node becomes a shape of the page with its
  * label in it (a label that moves with the shape), every link an arrow
- * attached to the shapes at its ends (it follows them when they move, with
- * right angles), subgraphs boxes with their title, and the colours of
- * `classDef`/`style`/`linkStyle` are kept.
+ * attached to the shapes at its ends (it follows them when they move), drawn
+ * as a smooth curve like Mermaid draws it (or with right angles or straight
+ * lines, as the diagram's `curve` says), subgraphs boxes with their title,
+ * and the colours of `classDef`/`style`/`linkStyle` are kept.
  */
 
 export interface TextMeasure {
@@ -70,8 +72,13 @@ const CLUSTER_LINE = "#808080";
 const CLUSTER_FILLS = ["#f3f3f3", "#e7e7e7", "#dcdcdc", "#d1d1d1"];
 const GAP = 2;
 const STUB = 22;
-/** Room kept around measured text, so that it never wraps differently. */
+/**
+ * Room kept around measured text, so that it never wraps differently – not
+ * even when the diagram is scaled to fit a page, which changes the widths of
+ * text a little: a few units, and a few per cent.
+ */
 const SLACK = 4;
+const SLACK_FACTOR = 1.04;
 
 const CSS_COLORS: Record<string, string> = {
   black: "#000000",
@@ -388,6 +395,28 @@ function port(shape: Stroke, dir: FlowDirection, du: number, dv: number): Pt {
   return attachPoint(shape, { x: c.x + d.x * 1e4, y: c.y + d.y * 1e4 }, GAP + shape.width / 2);
 }
 
+/**
+ * Where an edge along the flow enters a shape: on its near side, `du` across
+ * the flow from its middle (several edges coming into one shape get places of
+ * their own). The middle of the side when `du` misses the shape.
+ */
+function entry(shape: Stroke, dir: FlowDirection, du: number): Pt {
+  if (Math.abs(du) < 0.05) return port(shape, dir, 0, -1);
+  const { toN, fromN } = frame(dir);
+  const poly = closedOutline(shape)?.map(toN);
+  const c = toN(shapeCenter(shape));
+  const u = c.u + du;
+  let near = Infinity;
+  for (let i = 0; poly && i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    if ((a.u - u) * (b.u - u) > 0 || Math.abs(b.u - a.u) < 1e-9) continue;
+    near = Math.min(near, a.v + ((u - a.u) / (b.u - a.u)) * (b.v - a.v));
+  }
+  if (!Number.isFinite(near) || near > c.v) return port(shape, dir, 0, -1);
+  return fromN(u, near - GAP - shape.width / 2);
+}
+
 function spanU(shape: Stroke, dir: FlowDirection): [number, number] {
   const b = strokePointBounds(shape);
   const { toN } = frame(dir);
@@ -422,16 +451,38 @@ function clearLane(u: number, side: number, a: number, b: number, rects: NRect[]
   return u;
 }
 
+type NPt = { u: number; v: number };
+
+/** An edge worked out: its route with right angles, its label, and what a curve along it is drawn from. */
+export interface EdgePlan {
+  src: Stroke;
+  dst: Stroke;
+  /** With right angles (page coordinates). */
+  ortho: Pt[];
+  label: Rect | null;
+  /** Mermaid's points of the edge: its ends on the outlines, the middle of every gap between ranks and its bends (none when it leaves or enters a shape from a side). */
+  bends: Pt[] | null;
+  /**
+   * Curves that are upright wherever the edge crosses a rank (out of its
+   * shape, past its label, into its target) and bend between the ranks: as
+   * far as they can, then only within the gaps.
+   */
+  upright: Pt[][];
+  obstacles: readonly Rect[];
+}
+
 /**
- * The points of an edge laid out from `src` to `dst`, with right angles, and
+ * The route of an edge laid out from `src` to `dst`, with right angles, and
  * where its label goes. An edge along the flow goes out of the shape's far
  * side and into the next one's near side, bending between ranks (out of or
  * into a side when a box is in the way); one against the flow goes out of a
  * side, along a channel beside what lies between and into the same side of
- * its target. `obstacles` are the boxes it should not run through.
+ * its target. `obstacles` are the boxes it should not run through;
+ * `entryShift` moves where it enters its target (across the flow).
  */
-export function routeEdge(src: Stroke, dst: Stroke, route: EdgeRoute, obstacles: readonly Rect[] = []): { points: Pt[]; label: Rect | null } {
+export function planEdge(src: Stroke, dst: Stroke, route: EdgeRoute, obstacles: readonly Rect[] = [], entryShift = 0): EdgePlan {
   const { toN, fromN, axis } = frame(route.dir);
+  const page = (pts: NPt[]) => pts.map((p) => fromN(p.u, p.v));
   const rects: NRect[] = obstacles.map((r) => {
     const a = toN({ x: r.x, y: r.y });
     const b = toN({ x: r.x + r.w, y: r.y + r.h });
@@ -441,14 +492,17 @@ export function routeEdge(src: Stroke, dst: Stroke, route: EdgeRoute, obstacles:
   const gaps = route.gaps.map(axis);
   const sc = toN(shapeCenter(src));
   const ec = toN(shapeCenter(dst));
-  const out: Array<{ u: number; v: number }> = [];
+  const out: NPt[] = [];
   let label = route.label;
+  let bends: NPt[] | null = null;
+  let upright: NPt[][] | null = null;
   if (!route.reversed) {
     let s = toN(port(src, route.dir, 0, 1));
-    let e = toN(port(dst, route.dir, 0, -1));
+    let e = toN(entry(dst, route.dir, entryShift));
     const us = [s.u, ...dummies.map((d) => d.u), e.u];
-    const head: Array<{ u: number; v: number }> = [];
-    const tail: Array<{ u: number; v: number }> = [];
+    const head: NPt[] = [];
+    const tail: NPt[] = [];
+    let sideways = false;
     // out of a side when something lies between the shape and the first gap
     if (rects.some((r) => hitsAlong(r, s.u, s.v, gaps[0]))) {
       const side = us[1] > s.u + 1 ? 1 : us[1] < s.u - 1 ? -1 : 1;
@@ -458,6 +512,7 @@ export function routeEdge(src: Stroke, dst: Stroke, route: EdgeRoute, obstacles:
       head.push(p, { u: lane, v: sc.v });
       s = { u: lane, v: sc.v };
       us[0] = lane;
+      sideways = true;
     } else head.push(s);
     const last = gaps.length - 1;
     if (rects.some((r) => hitsAlong(r, e.u, gaps[last], e.v))) {
@@ -468,10 +523,73 @@ export function routeEdge(src: Stroke, dst: Stroke, route: EdgeRoute, obstacles:
       tail.push({ u: lane, v: ec.v }, p);
       e = { u: lane, v: ec.v };
       us[us.length - 1] = lane;
+      sideways = true;
     } else tail.push(e);
     out.push(...head);
     gaps.forEach((g, i) => out.push({ u: us[i], v: g }, { u: us[i + 1], v: g }));
     out.push(...tail);
+    if (!sideways && gaps.length) {
+      // as Mermaid: out of the outline toward the middle of the first gap, above the next bend
+      const aims = gaps.map((g, i) => ({ u: us[i + 1], v: g }));
+      const start = toN(attachPoint(src, fromN(aims[0].u, aims[0].v), GAP + src.width / 2));
+      bends = [start];
+      aims.forEach((a, i) => {
+        bends?.push(a);
+        if (i < dummies.length) bends?.push(dummies[i]);
+      });
+      // and straight into the target, so that the arrow points into it
+      bends.push({ u: e.u, v: (aims[aims.length - 1].v + e.v) / 2 }, e);
+    }
+    if (gaps.length) {
+      // upright through every rank (straight past the label), bending between them: as far as it can, or only within the gaps
+      let lv: [number, number] | null = null;
+      if (label) {
+        const a = toN({ x: label.x, y: label.y }).v;
+        const b = toN({ x: label.x + label.w, y: label.y + label.h }).v;
+        lv = [Math.min(a, b), Math.max(a, b)];
+      }
+      // out of a side or into a side: a straight bit first, to round the corner on
+      const RADIUS = 14;
+      const runs = [{ u: s.u, v0: s.v, v1: s.v + (head.length > 1 ? 2 * RADIUS : 0) }];
+      for (const d of dummies) {
+        const k = lv && d.v >= lv[0] && d.v <= lv[1] ? Math.max(d.v - lv[0], lv[1] - d.v) + 3 : 0;
+        runs.push({ u: d.u, v0: d.v - k, v1: d.v + k });
+      }
+      runs.push({ u: e.u, v0: e.v - (tail.length > 1 ? 2 * RADIUS : 0), v1: e.v });
+      const along = (half: number): NPt[] => {
+        const pts: NPt[] = [];
+        const push = (...ps: NPt[]) => {
+          for (const p of ps) {
+            const last = pts[pts.length - 1];
+            if (!last || Math.abs(p.u - last.u) > 0.05 || Math.abs(p.v - last.v) > 0.05) pts.push(p);
+          }
+        };
+        push({ u: runs[0].u, v: runs[0].v0 });
+        for (let i = 1; i < runs.length; i++) {
+          const a = runs[i - 1];
+          const b = runs[i];
+          const lo = Math.max(a.v1, gaps[i - 1] - half);
+          const hi = Math.min(b.v0, gaps[i - 1] + half);
+          if (Math.abs(a.u - b.u) > 0.05) {
+            if (hi > lo) {
+              const c = (hi - lo) / 2;
+              push({ u: a.u, v: lo }, ...cubic({ u: a.u, v: lo }, { u: a.u, v: lo + c }, { u: b.u, v: hi - c }, { u: b.u, v: hi }));
+            } else push({ u: a.u, v: gaps[i - 1] }, { u: b.u, v: gaps[i - 1] });
+          }
+          push({ u: b.u, v: b.v0 }, { u: b.u, v: b.v1 });
+        }
+        // out of a side and into a side: round corners
+        const all = [...head.slice(0, -1), ...pts, ...tail.slice(1)];
+        const corners = new Set([head.length - 1, all.length - tail.length]);
+        return tidyN(all.flatMap((p, i) => (corners.has(i) && i > 0 && i < all.length - 1 ? fillet(all[i - 1], p, all[i + 1], RADIUS) : [p])));
+      };
+      const same = (a: NPt[], b: NPt[]) => a.length === b.length && a.every((p, i) => p.u === b[i].u && p.v === b[i].v);
+      upright = [];
+      for (const half of [Infinity, 4, 2, 1].map((k) => (k * DEFAULT_LAYOUT.rankSep) / 2)) {
+        const path = along(half);
+        if (!upright.some((u) => same(u, path))) upright.push(path);
+      }
+    }
   } else {
     const [s0, s1] = spanU(src, route.dir);
     const [e0, e1] = spanU(dst, route.dir);
@@ -493,6 +611,8 @@ export function routeEdge(src: Stroke, dst: Stroke, route: EdgeRoute, obstacles:
     const b = candidate(-preferred);
     const best = b.hits < a.hits ? b : a;
     out.push(best.sp, { u: best.chan, v: best.sp.v }, { u: best.chan, v: best.ep.v }, best.ep);
+    // round the side and back: the corners of the channel guide the curve
+    bends = out.slice();
     if (label) {
       // beside the channel
       const la = toN({ x: label.x, y: label.y });
@@ -504,7 +624,174 @@ export function routeEdge(src: Stroke, dst: Stroke, route: EdgeRoute, obstacles:
       label = { x: Math.min(p.x, r.x), y: Math.min(p.y, r.y), w: Math.abs(r.x - p.x), h: Math.abs(r.y - p.y) };
     }
   }
-  return { points: tidy(out.map((p) => fromN(p.u, p.v))), label };
+  return { src, dst, ortho: tidy(page(out)), label, bends: bends && page(bends), upright: upright ? upright.map((u) => tidy(page(u))) : [], obstacles };
+}
+
+/** Drop repeated points. */
+function tidyN(pts: NPt[]): NPt[] {
+  return pts.filter((p, i) => i === 0 || Math.abs(p.u - pts[i - 1].u) > 0.05 || Math.abs(p.v - pts[i - 1].v) > 0.05);
+}
+
+/** A corner b (between a and c) rounded off with a radius of r at most, half a leg at most. */
+function fillet(a: NPt, b: NPt, c: NPt, r: number): NPt[] {
+  const l1 = Math.hypot(b.u - a.u, b.v - a.v);
+  const l2 = Math.hypot(c.u - b.u, c.v - b.v);
+  const rr = Math.min(r, l1 / 2, l2 / 2);
+  if (rr < 0.5) return [b];
+  const p = { u: b.u + ((a.u - b.u) * rr) / l1, v: b.v + ((a.v - b.v) * rr) / l1 };
+  const e = { u: b.u + ((c.u - b.u) * rr) / l2, v: b.v + ((c.v - b.v) * rr) / l2 };
+  const out: NPt[] = [p];
+  for (let k = 1; k <= 6; k++) {
+    const t = k / 6;
+    const s = 1 - t;
+    out.push({ u: s * s * p.u + 2 * s * t * b.u + t * t * e.u, v: s * s * p.v + 2 * s * t * b.v + t * t * e.v });
+  }
+  return out;
+}
+
+/** Points along a cubic Bézier curve (without its start), about 5 units apart. */
+function cubic(p0: NPt, p1: NPt, p2: NPt, p3: NPt): NPt[] {
+  const len = Math.hypot(p1.u - p0.u, p1.v - p0.v) + Math.hypot(p2.u - p1.u, p2.v - p1.v) + Math.hypot(p3.u - p2.u, p3.v - p2.v);
+  const steps = Math.max(4, Math.min(64, Math.ceil(len / 5)));
+  const out: NPt[] = [];
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const s = 1 - t;
+    const a = s * s * s;
+    const b = 3 * s * s * t;
+    const c = 3 * s * t * t;
+    const d = t * t * t;
+    out.push({ u: a * p0.u + b * p1.u + c * p2.u + d * p3.u, v: a * p0.v + b * p1.v + c * p2.v + d * p3.v });
+  }
+  return out;
+}
+
+/** A path with right angles whose corners are rounded off (`radius` at most, half a leg at most). */
+function roundCorners(pts: ReadonlyArray<Pt>, radius: number): Pt[] {
+  const n = pts.map((p) => ({ u: p.x, v: p.y }));
+  return n.flatMap((p, i) => (i === 0 || i === n.length - 1 ? [p] : fillet(n[i - 1], p, n[i + 1], radius))).map((p) => ({ x: p.u, y: p.v }));
+}
+
+/** Does the segment from a to b run through the box? */
+function segmentHitsRect(a: Pt, b: Pt, r: Rect): boolean {
+  let t0 = 0;
+  let t1 = 1;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const clip = (p: number, qq: number): boolean => {
+    if (Math.abs(p) < 1e-12) return qq >= 0;
+    const t = qq / p;
+    if (p < 0) {
+      if (t > t1) return false;
+      if (t > t0) t0 = t;
+    } else {
+      if (t < t0) return false;
+      if (t < t1) t1 = t;
+    }
+    return true;
+  };
+  return clip(-dx, a.x - r.x) && clip(dx, r.x + r.w - a.x) && clip(-dy, a.y - r.y) && clip(dy, r.y + r.h - a.y) && t0 <= t1;
+}
+
+const grow = (r: Rect, d: number): Rect => ({ x: r.x - d, y: r.y - d, w: r.w + 2 * d, h: r.h + 2 * d });
+
+/** How many of the boxes a path runs through, and whether it goes into the shapes at its ends. */
+function pathHits(path: ReadonlyArray<Pt>, plan: EdgePlan, avoid: readonly Rect[]): number {
+  const boxes = [...plan.obstacles.map((r) => grow(r, M)), ...avoid.map((r) => grow(r, 2)), ...(plan.label ? [grow(plan.label, 2)] : [])];
+  let n = 0;
+  for (const r of boxes) {
+    for (let i = 1; i < path.length; i++) {
+      if (segmentHitsRect(path[i - 1], path[i], r)) {
+        n++;
+        break;
+      }
+    }
+  }
+  for (const s of [plan.src, plan.dst]) {
+    const poly = closedOutline(s);
+    if (poly && path.slice(1, -1).some((p) => pointInPolygon(p.x, p.y, poly))) n++;
+  }
+  return n;
+}
+
+/**
+ * How an edge is drawn: as Mermaid draws it – a curve through its points
+ * (curves), with right angles (step) or straight between its points
+ * (linear). A curve that would run through a box, a label or a title in
+ * `avoid` gives way to one that stays upright across the ranks, then to
+ * rounded right angles, then to the right angles themselves.
+ */
+export function drawEdge(plan: EdgePlan, curve: LinkCurve = "curve", avoid: readonly Rect[] = []): Pt[] {
+  if (curve === "step") return plan.ortho;
+  const tries: Pt[][] = [];
+  if (curve === "linear") {
+    if (plan.bends) tries.push(tidy(plan.bends));
+  } else {
+    if (plan.bends) tries.push(smoothPath(plan.bends));
+    tries.push(...plan.upright, roundCorners(plan.ortho, 18), roundCorners(plan.ortho, 8));
+  }
+  tries.push(plan.ortho);
+  let best = tries[tries.length - 1];
+  let fewest = Infinity;
+  for (const t of tries) {
+    const n = pathHits(t, plan, avoid);
+    if (n === 0) return t;
+    if (n < fewest) {
+      fewest = n;
+      best = t;
+    }
+  }
+  return best;
+}
+
+/** The points of an edge (see planEdge and drawEdge), and where its label goes. */
+export function routeEdge(src: Stroke, dst: Stroke, route: EdgeRoute, obstacles: readonly Rect[] = [], curve: LinkCurve = "curve"): { points: Pt[]; label: Rect | null } {
+  const plan = planEdge(src, dst, route, obstacles);
+  return { points: drawEdge(plan, curve), label: plan.label };
+}
+
+/** Gap between edges coming into one shape (at most), and how much of its side they may use. */
+const ENTRY_GAP = 18;
+const ENTRY_SPAN = 0.6;
+
+/**
+ * Where links come into their target, across the flow from its middle: when
+ * several come into one shape, each as near to where it comes from as it can
+ * be, in that order, with a gap between them and within the middle of the side.
+ */
+function entryShifts(links: ReadonlyArray<{ dst: Stroke; dir: FlowDirection; from: Pt } | null>): Map<number, number> {
+  const groups = new Map<string, Array<{ i: number; u: number }>>();
+  const span = new Map<string, number>();
+  const center = new Map<string, number>();
+  links.forEach((l, i) => {
+    if (!l) return;
+    const key = `${l.dst.id} ${l.dir}`;
+    const { toN } = frame(l.dir);
+    const list = groups.get(key) ?? [];
+    list.push({ i, u: toN(l.from).u });
+    groups.set(key, list);
+    const [u0, u1] = spanU(l.dst, l.dir);
+    span.set(key, u1 - u0);
+    center.set(key, toN(shapeCenter(l.dst)).u);
+  });
+  const out = new Map<number, number>();
+  for (const [key, list] of groups) {
+    if (list.length < 2) continue;
+    list.sort((a, b) => a.u - b.u || a.i - b.i);
+    const half = ((span.get(key) as number) * ENTRY_SPAN) / 2;
+    const gap = Math.min(ENTRY_GAP, (2 * half) / (list.length - 1));
+    const c = center.get(key) as number;
+    const want = list.map((l) => Math.max(-half, Math.min(half, l.u - c)));
+    const placed = placeInOrder(
+      want.map((w) => [[w, 1] as const]),
+      want,
+      list.slice(1).map(() => gap),
+    );
+    // back within the side
+    const shift = Math.max(0, -half - placed[0]) - Math.max(0, placed[placed.length - 1] - half);
+    list.forEach((l, k) => out.set(l.i, placed[k] + shift));
+  }
+  return out;
 }
 
 // ------------------------------------------------------------------ the diagram
@@ -528,7 +815,7 @@ export function flowchartToItems(g: MermaidFlowchart, text: TextMeasure = { meas
   const measureLines = (t: string, size: number, maxW: number) => {
     const lines = t ? wrap(t, maxW, size) : [];
     const w = lines.reduce((m, l) => Math.max(m, text.measure(l, size)), 0);
-    return { lines, w: lines.length ? Math.ceil(w) + SLACK : 0, h: lines.length * size * lh };
+    return { lines, w: lines.length ? Math.ceil(w * SLACK_FACTOR) + SLACK : 0, h: lines.length * size * lh };
   };
 
   // looks
@@ -564,11 +851,11 @@ export function flowchartToItems(g: MermaidFlowchart, text: TextMeasure = { meas
 
   // sizes
   const nodeSizes = new Map<string, Size>();
-  const nodeText = new Map<string, { lines: string[]; h: number; look: Look }>();
+  const nodeText = new Map<string, { lines: string[]; w: number; h: number; look: Look }>();
   for (const n of g.nodes.values()) {
     const look = nodeLook(n.id);
     const m = measureLines(n.label, look.fontSize, MERMAID_INK.maxLabelWidth);
-    nodeText.set(n.id, { lines: m.lines, h: m.h, look });
+    nodeText.set(n.id, { lines: m.lines, w: m.w, h: m.h, look });
     nodeSizes.set(n.id, shapeSize(n.shape, m.w, m.h));
   }
   const clusterText = new Map<string, { lines: string[]; w: number; h: number; look: Look }>();
@@ -661,7 +948,12 @@ export function flowchartToItems(g: MermaidFlowchart, text: TextMeasure = { meas
     for (const line of geo.inner) strokes.push(makeStroke({ pen: "ballpoint", color: look.line, width: look.width, pts: toPts(line), poly: true }));
     if (geo.closedInner) strokes.push(makeStroke({ pen: "ballpoint", color: look.line, width: look.width, pts: toPts(geo.closedInner), poly: true, closed: true }));
     if (info.lines.length && info.lines.some((l) => l)) {
+      // never narrower than the text was measured (with its slack): it would wrap again and run out of the shape
       const box = labelBox(main, info.h);
+      if (box.w < info.w) {
+        box.x = q(box.x + box.w / 2 - info.w / 2);
+        box.w = q(info.w);
+      }
       texts.push({ id: newId(), ...box, h: q(info.h), text: info.lines.join("\n"), size: look.fontSize, color: look.text, align: "center", container: main.id });
     }
   }
@@ -681,6 +973,30 @@ export function flowchartToItems(g: MermaidFlowchart, text: TextMeasure = { meas
     const skip = new Set([...ancestors(from), ...ancestors(to)]);
     return boxes.filter((b) => !skip.has(b.id)).map((b) => b.rect);
   };
+  // links coming into one shape along the flow get places of their own on its near side, in the order they come from (as in Mermaid)
+  const shifts = entryShifts(
+    g.edges.map((e, i) => {
+      const src = shapeOf.get(e.from);
+      const dst = shapeOf.get(e.to);
+      const route = layout.edges.get(String(i));
+      if (e.stroke === "invisible" || !src || !dst || src === dst || !route || route.reversed) return null;
+      return { dst, dir: route.dir, from: route.points.length ? route.points[route.points.length - 1] : shapeCenter(src) };
+    }),
+  );
+  // first where every link goes and where its label sits, then how it is drawn: curves keep off the other links' labels and the titles
+  const plans = g.edges.map((e, i): EdgePlan | null => {
+    const src = shapeOf.get(e.from);
+    const dst = shapeOf.get(e.to);
+    const route = layout.edges.get(String(i));
+    if (e.stroke === "invisible" || !src || !dst || src === dst || !route) return null;
+    return planEdge(src, dst, route, obstaclesFor(e.from, e.to), shifts.get(i) ?? 0);
+  });
+  const titles: Rect[] = [];
+  for (const [id, box] of layout.clusters) {
+    const t = clusterText.get(id);
+    if (box.title && t && t.w > 0) titles.push({ x: box.title.x, y: box.title.y, w: t.w, h: t.h });
+  }
+  const labelRects = plans.map((p, i) => (p?.label && edgeLooks[i].label.lines.length ? p.label : null));
   let arrows = 0;
   g.edges.forEach((e, i) => {
     if (e.stroke === "invisible") return;
@@ -688,7 +1004,8 @@ export function flowchartToItems(g: MermaidFlowchart, text: TextMeasure = { meas
     const dst = shapeOf.get(e.to);
     if (!src || !dst) return;
     const { look, label } = edgeLooks[i];
-    const route = layout.edges.get(String(i));
+    const curve = e.curve ?? g.curve;
+    const plan = plans[i];
     let stroke: Stroke;
     if (src === dst) {
       // a loop back to the same shape: a small loop on its right side, not attached
@@ -696,39 +1013,42 @@ export function flowchartToItems(g: MermaidFlowchart, text: TextMeasure = { meas
       const x0 = b.x + b.w + GAP + src.width / 2;
       const y1 = b.y + b.h * 0.3;
       const y2 = b.y + b.h * 0.7;
+      const loop = [
+        { x: x0, y: y1 },
+        { x: x0 + STUB, y: y1 },
+        { x: x0 + STUB, y: y2 },
+        { x: x0, y: y2 },
+      ];
       stroke = makeStroke({
         pen: "ballpoint",
         color: look.line,
         width: look.width,
-        pts: toPts([
-          { x: x0, y: y1 },
-          { x: x0 + STUB, y: y1 },
-          { x: x0 + STUB, y: y2 },
-          { x: x0, y: y2 },
-        ]),
+        pts: toPts(curve === "curve" ? smoothPath(loop) : loop),
         poly: true,
         arrow: e.end,
         arrowStart: e.start,
         dash: look.dash,
       });
       if (label.lines.length) texts.push({ id: newId(), x: q(x0 + STUB + 6), y: q(b.y + b.h / 2 - label.h / 2), w: q(label.w), h: q(label.h), text: label.lines.join("\n"), size: look.fontSize, color: look.text });
-    } else if (route) {
-      const routed = routeEdge(src, dst, route, obstaclesFor(e.from, e.to));
+    } else if (plan) {
+      const avoid = [...titles, ...labelRects.filter((r, j): r is Rect => r !== null && j !== i)];
       stroke = makeStroke({
         pen: "ballpoint",
         color: look.line,
         width: look.width,
-        pts: toPts(routed.points),
+        pts: toPts(drawEdge(plan, curve, avoid)),
         poly: true,
         arrow: e.end,
         arrowStart: e.start,
         dash: look.dash,
-        elbow: true,
+        // a straight line is routed straight again when its shapes move
+        elbow: curve !== "linear",
+        curve: curve === "curve",
         from: src.id,
         to: dst.id,
       });
-      if (label.lines.length && routed.label) {
-        texts.push({ id: newId(), x: q(routed.label.x), y: q(routed.label.y), w: q(label.w), h: q(label.h), text: label.lines.join("\n"), size: look.fontSize, color: look.text });
+      if (label.lines.length && plan.label) {
+        texts.push({ id: newId(), x: q(plan.label.x), y: q(plan.label.y), w: q(label.w), h: q(label.h), text: label.lines.join("\n"), size: look.fontSize, color: look.text });
       }
     } else {
       // between a subgraph and something in it: straight from outline to outline

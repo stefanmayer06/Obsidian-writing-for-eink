@@ -522,12 +522,15 @@ export class InkSurface {
       this.paint(this.bctx, page, null);
     }
     this.schedulePreload();
+    this.host.viewChanged?.();
+    this.host.pageRedrawn?.(true);
   }
 
   /** Redraw a part of the page (page units). */
   renderRect(r: Rect): void {
     if (this.width === 0) return;
     this.paint(this.bctx, this.page, inflate(r, 2));
+    this.host.pageRedrawn?.(false);
   }
 
   /** Redraw soon (e.g. after an image finished loading). */

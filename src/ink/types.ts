@@ -109,4 +109,15 @@ export interface SurfaceHost {
   /** Extra buttons for a lasso selection (e.g. "To text"). */
   selectionActions?(): SelectionAction[];
   notice?(message: string): void;
+  /** The page was drawn again: zoom, scroll, size or page may have changed. */
+  viewChanged?(): void;
+  /** The pen touched the page (screen position in CSS pixels, and the event's time on the performance clock). */
+  penDown?(clientX: number, clientY: number, timeStamp?: number): void;
+  /** The last pen stroke was not ink after all (a link tap, a snapped shape, scribble erasing). */
+  inkDiscarded?(): void;
+  /**
+   * The page was drawn again – not a pen stroke being written: all of it (`whole`: a page turn, undo,
+   * zoom) or a part (erasing, a snapped shape).
+   */
+  pageRedrawn?(whole: boolean): void;
 }

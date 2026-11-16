@@ -1,0 +1,1114 @@
+package io.github.stefanmayer06.inkbridge
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.ServiceInfo
+import android.graphics.PixelFormat
+import android.graphics.Rect
+import android.graphics.RectF
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.graphics.Point
+import android.view.Gravity
+import android.view.SurfaceView
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowManager
+import com.onyx.android.sdk.data.note.TouchPoint
+import com.onyx.android.sdk.pen.RawInputCallback
+import com.onyx.android.sdk.pen.TouchHelper
+import com.onyx.android.sdk.pen.data.TouchPointList
+
+/**
+ * Shows the pen's ink instantly over the Ink Notebook page, the way the Boox
+ * Notes app does: the Boox firmware draws the stroke straight onto the e-ink
+ * panel while the pen moves.
+ *
+ * A transparent window covers the screen. It takes no touches (so Obsidian gets
+ * the pen and the fingers exactly as before and records the stroke itself) and
+ * hosts Onyx's TouchHelper in its SurfaceFlinger mode, which reads the pen
+ * directly and has the firmware draw.
+ *
+ * The TouchHelper is driven the way Boox Rapid Draw drives it, which is known to
+ * work over other apps: raw drawing is opened once when the window has its size
+ * (again only when the screen turns) and then only paused and resumed, the
+ * drawing area is changed in place, and the pen is set after every resume
+ * (opening and resuming reset it). The firmware draws only while the plugin holds
+ * a lease, only inside the ink page and never over the plugin's toolbars and
+ * cards.
+ *
+ * While the firmware draws, the panel is in its handwriting mode and does not
+ * keep up with Obsidian's screen (a tool change or a new page would show late).
+ * So the firmware draws only while the pen is over the page: it pauses the moment
+ * the pen goes to a toolbar, something else is pressed, or the page changes, and
+ * draws again when the pen next hovers over the page ([InkGate]).
+ *
+ * Where the page is comes from the plugin: the page's part on screen (where ink
+ * stays), the ink view around it, and where Obsidian's window is on the screen.
+ * With that the drawing area is exact from the start; nothing is measured from
+ * strokes (that is only for older plugins that do not say where their window is).
+ */
+class BridgeService : Service() {
+    private val main = Handler(Looper.getMainLooper())
+    private lateinit var wm: WindowManager
+    private var overlay: SurfaceView? = null
+    private var helper: TouchHelper? = null
+    /** Raw drawing is open (once per overlay size). */
+    private var rawOpen = false
+    /** Instant ink is on: the firmware's pen reader runs, and the firmware draws whenever [gate] lets it. */
+    @Volatile private var enabled = false
+    /** When the firmware may draw, moment by moment (the pen over the page, nothing else changing). */
+    private val gate = InkGate()
+    /** Whether the firmware drew the strokes the plugin records. */
+    private val strokes = StrokeCheck()
+    /** When the firmware's drawing went on and off (wall clock ms, on), to tell whether it was drawing at a pen-down. */
+    private val renderLog = ArrayDeque<kotlin.Pair<Long, Boolean>>()
+    /** What the firmware was last asked (area, pen). */
+    private var applied: FirmwareRequest? = null
+    private var state: BridgeState? = null
+    private var lastSeq = Long.MIN_VALUE
+    private var lastUntil = Long.MIN_VALUE
+    private var lastClear: Long? = null
+    private var calibration = Calibration()
+    private var overlayW = 0
+    private var overlayH = 0
+    /** Where the overlay starts on the screen (Obsidian's window position is reported on the screen). */
+    private var overlayLeft = 0
+    private var overlayTop = 0
+    /** The screen and its system bars (to tell where Obsidian's window is from its size). */
+    private var bars: ScreenBars? = null
+    private var file: ControlFile? = null
+    private var socket: ControlSocket? = null
+    private var transport = "none"
+    private var error: String? = null
+    private var lastStatusKey = ""
+    private var lastStatusWrite = 0L
+    /** The self-test (whole screen, no Obsidian needed) runs until then. */
+    private var testUntil = 0L
+    /**
+     * The self-test's pen engine (TouchHelper.FEATURE_*): 2, the firmware's own reader reads the pen
+     * (what instant ink uses); 4 and 1, this window takes the pen for the test and hands its events
+     * to the firmware drawing (to find out what works on a tablet whose reader does not).
+     */
+    private var testFeature = TouchHelper.FEATURE_SF_TOUCH_RENDER
+    private var testHelper: TouchHelper? = null
+    /** Pen/finger events this window received during a test that takes the pen. */
+    @Volatile var touchEvents = 0
+        private set
+
+    /** What the firmware's pen reader reported (to tell whether the firmware path works on this tablet). */
+    @Volatile var penHovers = 0
+        private set
+    /**
+     * The pen touches the screen, by the pen reader's own thread (which reports in order, ahead of the
+     * main thread): the firmware is never switched on while this holds.
+     */
+    @Volatile private var penIsDown = false
+    /** When the pen reader last reported the pen hovering (wall clock ms, its thread). */
+    @Volatile private var lastHoverAt = 0L
+    /** The hover reports paused (the pen touched something, or went out of reach) since the main thread last looked. */
+    private val hoverGap = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** Strokes during which the firmware was not switched on because the pen was already down (it is at the pen-up). */
+    @Volatile var lateSwitchOns = 0
+        private set
+    private var lateThisStroke = false
+    @Volatile var penStrokes = 0
+        private set
+
+    /** The pen reader's counts when the last test began (the test's own are what came since). */
+    private var testHovers0 = 0
+    private var testStrokes0 = 0
+    private var testRan = false
+    /** What the pen reader reported during the last test, or null when none ran. */
+    val testCounts: kotlin.Pair<Int, Int>? get() = if (testRan) kotlin.Pair(penHovers - testHovers0, penStrokes - testStrokes0) else null
+
+    /** When the plugin last sent its state (for the app's screen). */
+    var lastMessageAt = 0L
+        private set
+    val isArmed: Boolean get() = enabled
+    val missedStrokes: Int get() = strokes.missed
+    val lastMissed: PenDown? get() = strokes.lastMissed
+    /** Instant ink in words, for the app's screen. */
+    val inkState: String get() = when {
+        !enabled -> "off"
+        gate.draws -> "drawing (pen over the page)"
+        else -> "paused – ${gate.reason}"
+    }
+    val isTesting: Boolean get() = testUntil > System.currentTimeMillis()
+    val testName: String get() = testNameOf(testFeature)
+    val isCalibrated: Boolean get() = calibration.calibrated
+    val transportName: String get() = transport
+    val lastError: String? get() = error
+    val bridgeDirs get() = file?.bridgeDirs ?: emptyList()
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+        startInForeground()
+        wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        addOverlay()
+        file = ControlFile(this) { text -> main.post { onText(text, "file") } }.also { it.start() }
+        socket = try {
+            ControlSocket(
+                ControlSocket.PORT,
+                onText = { text -> main.post { onText(text, "socket") } },
+                onClientsChanged = { n -> main.post { onSocketClients(n) } },
+            ).also { it.start() }
+        } catch (e: Exception) {
+            null
+        }
+        val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenOff, filter, RECEIVER_NOT_EXPORTED) else registerReceiver(screenOff, filter)
+        main.postDelayed(leaseCheck, LEASE_CHECK_MS)
+        // the plugin in the vault follows this app (when the user asked for that once): after an update
+        // of the app, the plugin it goes with is put into the vault, and Obsidian loads it when it next starts
+        if (PluginBundle.keepsMatched(this)) {
+            Thread {
+                val (done, _) = PluginBundle.updateOlder(this, Vaults.bridgeDirs(this))
+                if (done.isNotEmpty()) pluginsUpdated = done
+            }.start()
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_STOP -> {
+                BootReceiver.setWanted(this, false)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_RESCAN -> file?.rescanNow()
+            ACTION_TEST -> startTest(intent.getIntExtra(EXTRA_FEATURE, TouchHelper.FEATURE_SF_TOUCH_RENDER))
+            ACTION_RECALIBRATE -> recalibrate()
+        }
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        main.removeCallbacksAndMessages(null)
+        testHelper?.let { runCatching { it.closeRawDrawing() } }
+        testHelper = null
+        closeRaw()
+        try {
+            unregisterReceiver(screenOff)
+        } catch (_: Exception) {
+        }
+        file?.stop()
+        socket?.let { s -> Thread { runCatching { s.stop(500) } }.start() }
+        overlay?.let { runCatching { wm.removeViewImmediate(it) } }
+        overlay = null
+        helper = null
+        instance = null
+        super.onDestroy()
+    }
+
+    // ------------------------------------------------------------------ overlay
+
+    private fun addOverlay() {
+        val v = SurfaceView(this)
+        v.setZOrderOnTop(true)
+        v.holder.setFormat(PixelFormat.TRANSPARENT)
+        // the same window as Boox Rapid Draw's
+        // the whole screen, system bars included: laid out clear of them (Android's default for a
+        // window), the overlay missed a strip of the screen where the firmware then could not draw – and
+        // Obsidian's page can reach there
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSPARENT,
+        )
+        lp.gravity = Gravity.TOP or Gravity.START
+        lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        if (Build.VERSION.SDK_INT >= 30) {
+            lp.fitInsetsTypes = 0
+            lp.fitInsetsSides = 0
+        }
+        // Android 12+ passes touches through another app's window only below 0.8 opacity
+        lp.alpha = 0.2f
+        wm.addView(v, lp)
+        overlay = v
+        helper = try {
+            TouchHelper.create(v, TouchHelper.FEATURE_SF_TOUCH_RENDER, callback)
+        } catch (e: Throwable) {
+            error = "Onyx pen SDK not available: ${e.javaClass.simpleName}"
+            null
+        }
+        v.setOnApplyWindowInsetsListener { view, insets ->
+            readBars(view, insets)
+            insets
+        }
+        v.addOnLayoutChangeListener { view, l, t, r, b, _, _, _, _ ->
+            val w = r - l
+            val h = b - t
+            val loc = IntArray(2)
+            view.getLocationOnScreen(loc)
+            val moved = loc[0] != overlayLeft || loc[1] != overlayTop
+            overlayLeft = loc[0]
+            overlayTop = loc[1]
+            view.rootWindowInsets?.let { readBars(view, it) }
+            if (w > 0 && h > 0 && (w != overlayW || h != overlayH)) {
+                overlayW = w
+                overlayH = h
+                onOverlayResized()
+            } else if (moved) {
+                state?.let { place(it) }
+                applyNow()
+            }
+        }
+    }
+
+    /** The overlay got its size or the screen turned: open raw drawing for it and start the position over. */
+    private fun onOverlayResized() {
+        closeRaw()
+        calibration.reset(0f, guessOffsetY())
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        prefs.getString(calibrationKey(), null)?.split(",")?.map { it.toFloatOrNull() }?.let {
+            if (it.size >= 2 && it[0] != null && it[1] != null) calibration.restore(it[0]!!, it[1]!!, it.getOrNull(2), it.getOrNull(3))
+        }
+        prefs.getString(correctionKey(), null)?.split(",")?.map { it.toFloatOrNull() }?.let {
+            if (it.size >= 2 && it[0] != null && it[1] != null) calibration.restoreCorrection(it[0]!!, it[1]!!)
+        }
+        // the plugin said where its window is: placed from that at once (no strokes needed)
+        state?.let { place(it) }
+        openRaw()
+        applyNow()
+        report()
+    }
+
+    /** Obsidian reported where its window is on the screen: the page is placed from that, exactly. */
+    private fun placeFromWindow(win: WindowGeom, dpr: Float) {
+        val (x, y) = windowOffset(win, dpr, overlayLeft, overlayTop)
+        if (calibration.placeFromWindow(x, y, "events")) applied = null
+    }
+
+    /**
+     * Where Obsidian's window is: from its size and the screen's bars when that fits one full-screen
+     * layout (hard facts on both sides), else from the screen positions in its events (a split screen,
+     * a floating window); only a plugin that says neither (older than this Bridge) leaves it to be
+     * measured from strokes.
+     */
+    private fun place(s: BridgeState) {
+        val bySize = s.vp?.let { vp -> bars?.let { windowFromViewport(vp, s.dpr, it) } }
+        val win = s.win
+        eventsDisagree = null
+        if (bySize != null) {
+            if (win != null) {
+                val dx = win.x * s.dpr - bySize.first
+                val dy = win.y * s.dpr - bySize.second
+                if (kotlin.math.abs(dx) > 3f || kotlin.math.abs(dy) > 3f) eventsDisagree = kotlin.Pair(dx, dy)
+            }
+            if (calibration.placeFromWindow(bySize.first - overlayLeft, bySize.second - overlayTop, "size")) applied = null
+        } else if (win != null) {
+            placeFromWindow(win, s.dpr)
+        }
+    }
+
+    /** Obsidian's events put its window this far (px) from where its size does (null: they agree, or one is missing). */
+    private var eventsDisagree: kotlin.Pair<Float, Float>? = null
+
+    /** The screen's size and system bars, as Android tells the overlay (which spans the whole screen). */
+    private fun readBars(view: View, insets: WindowInsets) {
+        val size = Point()
+        if (Build.VERSION.SDK_INT >= 30) {
+            val b = wm.maximumWindowMetrics.bounds
+            size.set(b.width(), b.height())
+        } else {
+            @Suppress("DEPRECATION")
+            wm.defaultDisplay.getRealSize(size)
+        }
+        val next = if (Build.VERSION.SDK_INT >= 30) {
+            val st = insets.getInsetsIgnoringVisibility(WindowInsets.Type.statusBars())
+            val nav = insets.getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars())
+            val shown = insets.isVisible(WindowInsets.Type.navigationBars())
+            // an overlay may be told of no status bar on some firmware: the system's own height for it then
+            ScreenBars(size.x, size.y, if (st.top > 0) st.top else statusBarHeight(), if (shown) nav.bottom else 0, if (shown) nav.left else 0, if (shown) nav.right else 0)
+        } else {
+            @Suppress("DEPRECATION")
+            ScreenBars(
+                size.x, size.y, if (insets.stableInsetTop > 0) insets.stableInsetTop else statusBarHeight(),
+                insets.stableInsetBottom, insets.stableInsetLeft, insets.stableInsetRight,
+            )
+        }
+        if (next == bars) return
+        bars = next
+        state?.let { st ->
+            place(st)
+            applyNow()
+        }
+    }
+
+    /** Where Obsidian's window probably starts in the overlay: below the status bar. */
+    private fun guessOffsetY(): Float {
+        val loc = IntArray(2)
+        overlay?.getLocationOnScreen(loc)
+        return (statusBarHeight() - loc[1]).toFloat()
+    }
+
+    // v2: offset and scale (the 0.4/0.5 offsets were measured assuming the device pixel ratio)
+    private fun calibrationKey() = "cal2_${overlayW}x$overlayH"
+
+    /** A shift between the firmware's pixels and Obsidian's reported window (see Calibration.placeFromWindow). */
+    private fun correctionKey() = "corr_${overlayW}x$overlayH"
+
+    private fun saveCalibration() {
+        val c = calibration
+        val edit = getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+        if (c.fromWindow) {
+            edit.putString(correctionKey(), "${c.correctionX},${c.correctionY}")
+        } else {
+            edit.putString(calibrationKey(), "${c.offsetX},${c.offsetY},${c.scaleX ?: ""},${c.scaleY ?: ""}")
+        }
+        edit.apply()
+    }
+
+    private fun statusBarHeight(): Int {
+        val id = resources.getIdentifier("status_bar_height", "dimen", "android")
+        return if (id > 0) resources.getDimensionPixelSize(id) else 0
+    }
+
+    // ------------------------------------------------------------------ messages
+
+    private fun onText(text: String, source: String) {
+        val s = BridgeState.parse(text) ?: return
+        lastMessageAt = System.currentTimeMillis()
+        transport = source
+        // the same state again (both channels, or an unchanged file)
+        if (s.seq == lastSeq && s.until == lastUntil) return
+        lastSeq = s.seq
+        lastUntil = s.until
+        val prev = state
+        state = s
+        file?.active = s.leased(lastMessageAt)
+        // where Obsidian's window is: the page is placed from it (no measuring)
+        place(s)
+        // what the gate waited for (a state sent after a toolbar visit, or the result of a press), then
+        // what this one changes
+        gate.stateSent(s.at, s.uiDone)
+        val screenChanged = prev != null && !s.sameScreen(prev)
+        // a press elsewhere: wait for what it changes – unless that came with it (the control file
+        // keeps only the latest state, so the press and the new tool can arrive as one)
+        if (prev != null && s.ui != prev.ui && !screenChanged) gate.pressedElsewhere(s.at, lastMessageAt, s.ui, s.uiDone)
+        if (screenChanged) gate.changed()
+        val placed = if (calibration.fromWindow) firmwareRequest(s, calibration, overlayW, overlayH, lastMessageAt) else null
+        for (d in s.allDowns) {
+            // each pen-down once (later messages repeat the last few)
+            if (!strokes.pluginDown(d)) continue
+            strokesWritten++
+            // only a stroke while the firmware was drawing must have a pen-down of the firmware's – and,
+            // with the page placed from Obsidian's window, only one that began on the page: off the page
+            // (the grey around it, where no ink stays) the firmware does not draw, by design. Anywhere on
+            // the page it counts, also where the firmware was told not to draw (a part left out) or
+            // cannot: the plugin reports only pen-downs that reached the page, so that stroke is ink,
+            // and the firmware pauses for it so that it shows.
+            when {
+                !wasDrawingAt(d.t) -> {
+                    strokesWhilePaused++
+                    strokes.forget(d)
+                }
+                placed != null && !onPage(d, s.dpr, placed) -> {
+                    strokesOffPage++
+                    strokes.forget(d)
+                }
+            }
+            if (calibration.match(d, s.dpr)) {
+                saveCalibration()
+                applied = null
+            }
+        }
+        val prevClear = lastClear
+        lastClear = s.clear
+        if (prevClear != null && prevClear != s.clear) gate.cleared()
+        applyNow()
+        checkStrokes()
+        report()
+    }
+
+    /** The firmware was drawing at wall clock time [t] (armed, and not paused by the gate). */
+    private fun wasDrawingAt(t: Long): Boolean = renderLog.lastOrNull { it.first <= t }?.second ?: false
+
+    private val strokeCheck = Runnable { checkStrokes() }
+
+    /**
+     * Strokes the plugin recorded but the firmware did not draw: the firmware pauses at once, so the
+     * panel shows Obsidian's own drawing of them (in the firmware's drawing mode it would not). If
+     * the placement says the firmware draws there, the placement is wrong: a measured scale goes.
+     */
+    private fun checkStrokes() {
+        main.removeCallbacks(strokeCheck)
+        val now = System.currentTimeMillis()
+        val misses = strokes.check(now)
+        if (misses.isNotEmpty()) {
+            if (enabled) {
+                gate.missed()
+                helper?.let { syncInk(it) }
+            }
+            val s = state
+            val r = applied
+            for (d in misses) {
+                notDrawn.addLast(Miss(d, describeMiss(d, s?.dpr ?: 1f, pageRequest), now))
+                while (notDrawn.size > MISSES_KEPT) notDrawn.removeFirst()
+            }
+            if (s != null && r != null && misses.any { placedInside(it, s.dpr, r, INSIDE_MARGIN_PX) } && calibration.distrustScale(s.dpr)) {
+                saveCalibration()
+                applied = null
+                applyNow()
+            }
+            report(force = true)
+        }
+        strokes.nextCheckAt()?.let { main.postDelayed(strokeCheck, maxOf(10L, it - now)) }
+    }
+
+    /** By the current placement, the pen-down is on the page (where ink stays). */
+    private fun onPage(d: PenDown, dpr: Float, r: FirmwareRequest): Boolean {
+        val (x, y) = calibration.pointToPx(d.x, d.y, dpr)
+        val m = ON_PAGE_MARGIN_PX
+        val p = r.page
+        return x >= p.l + m && x < p.r - m && y >= p.t + m && y < p.b - m
+    }
+
+    /** A stroke the firmware did not draw, and what the Bridge knows about why. */
+    private data class Miss(val d: PenDown, val why: String, val at: Long)
+
+    /** The last strokes the firmware did not draw (for the app's screen: where, and why). */
+    private val notDrawn = ArrayDeque<Miss>()
+    /** The plugin's pen-downs since the Bridge started: all, those while the firmware was paused, those off the page. */
+    private var strokesWritten = 0
+    private var strokesWhilePaused = 0
+    private var strokesOffPage = 0
+    /** What the firmware was last asked for Obsidian's page (not for a test), and when. */
+    private var pageRequest: FirmwareRequest? = null
+    private var pageRequestAt = 0L
+
+    /** Where a stroke the firmware did not draw began, by what the firmware was asked, and what its pen reader said. */
+    private fun describeMiss(d: PenDown, dpr: Float, r: FirmwareRequest?): String {
+        val (x, y) = calibration.pointToPx(d.x, d.y, dpr)
+        val where = when {
+            r == null -> "no drawing area was set"
+            else -> {
+                val ex = r.exclude.firstOrNull { it.contains(x, y) }
+                val l = r.limit
+                when {
+                    ex != null -> "under a part left out (x ${ex.l}–${ex.r}, y ${ex.t}–${ex.b})"
+                    !l.contains(x, y) -> "outside the firmware's area (x ${l.l}–${l.r}, y ${l.t}–${l.b})"
+                    else -> {
+                        // where something was left out before (a card that has closed): the firmware should draw there again
+                        val past = pastExcludes.lastOrNull { it.first.contains(x, y) }
+                        if (past == null) {
+                            "inside the firmware's area"
+                        } else {
+                            val p = past.first
+                            "inside the firmware's area, where a part was left out until %d s before (x %d–%d, y %d–%d)".format((d.t - past.second) / 1000, p.l, p.r, p.t, p.b)
+                        }
+                    }
+                }
+            }
+        }
+        val near = strokes.nearestFirmware(d.t)
+        val reader = when {
+            near == null || kotlin.math.abs(near) > 5000 -> "its pen reader reported no pen-down"
+            near < 0 -> "its pen reader's nearest pen-down was ${-near} ms earlier"
+            else -> "its pen reader's nearest pen-down was $near ms later"
+        }
+        return "at %.0f, %.0f px (%.0f, %.0f in Obsidian), %s; %s".format(x, y, d.x, d.y, where, reader)
+    }
+
+    /** By the current placement, the pen-down is at least [m] pixels inside the firmware's drawing area. */
+    private fun placedInside(d: PenDown, dpr: Float, r: FirmwareRequest, m: Int): Boolean {
+        val (x, y) = calibration.pointToPx(d.x, d.y, dpr)
+        val l = r.limit
+        return x >= l.l + m && x < l.r - m && y >= l.t + m && y < l.b - m && r.exclude.none { it.contains(x, y, m) }
+    }
+
+    private fun onSocketClients(n: Int) {
+        if (n == 0 && transport == "socket") {
+            // Obsidian closed the connection (went to the background, or the page closed)
+            state = state?.copy(armed = false)
+            applyNow()
+            report()
+        }
+    }
+
+    private val leaseCheck = object : Runnable {
+        override fun run() {
+            val now = System.currentTimeMillis()
+            val live = state?.live(now) == true
+            if (enabled && !live && !isTesting) {
+                applyNow()
+                report()
+            }
+            file?.active = state?.leased(now) == true
+            if (now - lastStatusWrite > STATUS_EVERY_MS) report(force = true)
+            main.postDelayed(this, LEASE_CHECK_MS)
+        }
+    }
+
+    private val screenOff = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            state = null
+            testUntil = 0
+            applyNow()
+            report()
+        }
+    }
+
+    // ------------------------------------------------------------------ the self-test
+
+    /** The firmware drawing over the whole screen for a while, with no Obsidian involved. */
+    private fun startTest(feature: Int) {
+        endAppTest()
+        testFeature = feature
+        testUntil = System.currentTimeMillis() + TEST_MS
+        testHovers0 = penHovers
+        testStrokes0 = penStrokes
+        testRan = true
+        touchEvents = 0
+        if (feature == TouchHelper.FEATURE_SF_TOUCH_RENDER) {
+            applied = null
+            applyNow()
+        } else {
+            startAppTest(feature)
+        }
+        report()
+        main.postDelayed({
+            if (!isTesting) {
+                endAppTest()
+                applied = null
+                applyNow()
+                report()
+            }
+        }, TEST_MS + 100)
+    }
+
+    /** A test where this window takes the pen and hands its events to the firmware drawing. */
+    private fun startAppTest(feature: Int) {
+        val v = overlay ?: return
+        // the firmware-reader helper steps aside for the test
+        closeRaw()
+        setTouchable(true)
+        val h = try {
+            TouchHelper.create(v, feature, callback)
+        } catch (e: Throwable) {
+            error = "Test ${testNameOf(feature)}: ${e.javaClass.simpleName} ${e.message ?: ""}"
+            null
+        } ?: return
+        testHelper = h
+        v.setOnTouchListener { _, e ->
+            touchEvents++
+            try {
+                h.onTouchEvent(e)
+            } catch (_: Throwable) {
+            }
+            true
+        }
+        try {
+            h.openRawDrawing()
+            setArea(h, PxRect(0, 0, overlayW, overlayH), emptyList())
+            h.setRawInputReaderEnable(true)
+            h.setRawDrawingEnabled(true)
+            h.setStrokeStyle(BridgeState.STYLE_PENCIL)
+            h.setStrokeColor(0xFF000000.toInt())
+            h.setStrokeWidth(3f)
+        } catch (e: Throwable) {
+            error = "Test ${testNameOf(feature)}: ${e.javaClass.simpleName} ${e.message ?: ""}"
+        }
+    }
+
+    private fun endAppTest() {
+        val h = testHelper ?: return
+        testHelper = null
+        runCatching {
+            h.setRawDrawingEnabled(false)
+            h.closeRawDrawing()
+        }
+        overlay?.setOnTouchListener(null)
+        setTouchable(false)
+        // back to the firmware's own reader
+        openRaw()
+    }
+
+    private fun setTouchable(on: Boolean) {
+        val v = overlay ?: return
+        val lp = v.layoutParams as? WindowManager.LayoutParams ?: return
+        lp.flags = if (on) lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv() else lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        runCatching { wm.updateViewLayout(v, lp) }
+    }
+
+    // ------------------------------------------------------------------ firmware drawing
+
+    private fun openRaw() {
+        val h = helper ?: return
+        if (rawOpen || overlayW == 0) return
+        try {
+            h.openRawDrawing()
+            setArea(h, PxRect(0, 0, overlayW, overlayH), emptyList())
+            // drawn only while the plugin asks: paused (opening leaves the firmware "started", not paused)
+            h.forceSetRawDrawingEnabled(false)
+            rawOpen = true
+            enabled = false
+            gate.disarm()
+            applied = null
+        } catch (e: Throwable) {
+            error = "Could not open raw drawing: ${e.javaClass.simpleName} ${e.message ?: ""}"
+        }
+    }
+
+    private fun closeRaw() {
+        val h = helper ?: return
+        if (!rawOpen) return
+        rawOpen = false
+        enabled = false
+        gate.disarm()
+        applied = null
+        try {
+            h.setRawDrawingEnabled(false)
+            h.closeRawDrawing()
+        } catch (_: Throwable) {
+        }
+    }
+
+    /** The firmware request now: the self-test, the plugin's state, or nothing. */
+    private fun request(now: Long): FirmwareRequest? {
+        if (testUntil > now && overlayW > 0 && testFeature == TouchHelper.FEATURE_SF_TOUCH_RENDER) {
+            return FirmwareRequest(PxRect(0, 0, overlayW, overlayH), emptyList(), PenSpec(BridgeState.STYLE_PENCIL, 3f, 0xFF000000.toInt()), 1000, true)
+        }
+        return firmwareRequest(state, calibration, overlayW, overlayH, now)?.also {
+            pageRequest = it
+            pageRequestAt = now
+        }
+    }
+
+    private fun applyNow() {
+        // a test that takes the pen is running: it has the window to itself
+        if (testHelper != null) return
+        val h = helper ?: return
+        if (!rawOpen) openRaw()
+        if (!rawOpen) return
+        val target = request(System.currentTimeMillis())
+        try {
+            if (target == null) {
+                if (enabled) h.setRawDrawingEnabled(false)
+                enabled = false
+                gate.disarm()
+                return
+            }
+            val cur = applied
+            // also whenever instant ink is switched on: the firmware is told its area afresh each time
+            if (cur == null || cur.limit != target.limit || cur.exclude != target.exclude || !enabled) {
+                // what was left out and no longer is: kept for the app's screen (a stroke the firmware
+                // does not draw there means the firmware did not take the change)
+                if (cur != null) {
+                    val now = System.currentTimeMillis()
+                    for (old in cur.exclude) if (old !in target.exclude) pastExcludes.addLast(kotlin.Pair(old, now))
+                    while (pastExcludes.size > PAST_EXCLUDES_KEPT) pastExcludes.removeFirst()
+                }
+                setArea(h, target.limit, target.exclude)
+            }
+            if (!enabled) {
+                // the pen reader runs; the firmware draws from the pen's first hover over the page
+                h.setRawInputReaderEnable(true)
+                h.resetPenDefaultRawDrawing()
+                enabled = true
+                gate.arm()
+            }
+            if (cur?.refreshMs != target.refreshMs) h.setPenUpRefreshTimeMs(target.refreshMs)
+            if (cur?.sideButton != target.sideButton) h.enableSideBtnErase(target.sideButton)
+            applied = target
+            error = null
+            syncInk(h, penChanged = cur?.pen != target.pen)
+        } catch (e: Throwable) {
+            error = "${e.javaClass.simpleName}: ${e.message ?: ""}"
+            applied = null
+        }
+    }
+
+    /**
+     * Tell the firmware where to draw and what to leave out. Never with an empty list of parts left
+     * out: the SDK ignores an empty list, and what was left out before would stay left out
+     * ([excludeForFirmware]).
+     */
+    private fun setArea(h: TouchHelper, limit: PxRect, exclude: List<PxRect>) {
+        h.setLimitRect(limit.toRect(), excludeForFirmware(limit, exclude).map { it.toRect() })
+    }
+
+    /** Parts that were left out of the drawing area and no longer are, with when that ended (the last few). */
+    private val pastExcludes = ArrayDeque<kotlin.Pair<PxRect, Long>>()
+
+    /**
+     * The firmware draws or pauses as [gate] says. Pausing takes the panel out of its handwriting
+     * mode, so it shows Obsidian's screen again (the page's own drawing of every stroke, the
+     * toolbar, cards, a new page).
+     */
+    private fun syncInk(h: TouchHelper, penChanged: Boolean = false) {
+        // never switched on while the pen touches: the firmware would not draw that stroke, and the
+        // panel would stop showing Obsidian's drawing of it (it is switched on at the pen-up instead)
+        val late = enabled && gate.draws && penIsDown && !h.isRawDrawingRenderEnabled
+        if (late && !lateThisStroke) {
+            lateThisStroke = true
+            lateSwitchOns++
+        }
+        val want = enabled && gate.draws && !late
+        if (renderLog.lastOrNull()?.second != want) {
+            renderLog.addLast(kotlin.Pair(System.currentTimeMillis(), want))
+            while (renderLog.size > 64) renderLog.removeFirst()
+        }
+        try {
+            if (want && !h.isRawDrawingRenderEnabled) {
+                h.setRawDrawingRenderEnabled(true)
+                applied?.let { setPen(h, it) }
+            } else if (!want && h.isRawDrawingRenderEnabled) {
+                h.setRawDrawingRenderEnabled(false)
+            } else if (want && penChanged) {
+                applied?.let { setPen(h, it) }
+            }
+        } catch (e: Throwable) {
+            error = "${e.javaClass.simpleName}: ${e.message ?: ""}"
+        }
+        // a tablet whose pen reader reports no hovering: draw again a moment later instead
+        if (enabled && !want && penHovers == 0) {
+            main.removeCallbacks(releaseWithoutHover)
+            main.postDelayed(releaseWithoutHover, NO_HOVER_RELEASE_MS)
+        }
+    }
+
+    private val releaseWithoutHover: Runnable = object : Runnable {
+        override fun run() {
+            val h = helper ?: return
+            if (!enabled || penHovers > 0) return
+            // not mid-stroke: again a moment later
+            if (penIsDown) {
+                main.postDelayed(this, NO_HOVER_RELEASE_MS)
+                return
+            }
+            gate.hover(InkGate.Zone.PAGE, System.currentTimeMillis())
+            syncInk(h)
+        }
+    }
+
+    /** The pen hovers at (x, y) in the overlay: over the page, its edge, or a toolbar. */
+    private fun onHover(x: Float, y: Float) {
+        val h = helper ?: return
+        val r = applied ?: return
+        if (!enabled || testHelper != null) return
+        // a report that waited here while the pen touched down changes nothing: the pen reader says the
+        // pen is down, or its hover reports have stopped (a pen-down outside the firmware's area is not
+        // reported at all, only the hover reports stop)
+        val now = System.currentTimeMillis()
+        val stale = now - lastHoverAt > HOVER_GAP_MS
+        gate.hover(zoneOf(x, y, r), now, gap = hoverGap.getAndSet(false), penDown = penIsDown || stale)
+        syncInk(h)
+    }
+
+    /** Opening and resuming reset the pen, so it is set again after each. */
+    private fun setPen(h: TouchHelper, r: FirmwareRequest) {
+        h.setStrokeStyle(r.pen.style)
+        h.setStrokeColor(r.pen.color)
+        h.setStrokeWidth(r.pen.width)
+    }
+
+    /** What the firmware is asked now, in words (for the app's screen). */
+    val drawingArea: String
+        get() {
+            val a = applied ?: return "none"
+            val c = calibration
+            val scale = if (c.scaleX != null || c.scaleY != null) {
+                " – scale measured: %.3f × %.3f".format(c.scaleX ?: 0f, c.scaleY ?: 0f)
+            } else {
+                ""
+            }
+            val page = state?.page?.let { p ->
+                val dpr = state?.dpr ?: 1f
+                ", page %.0f×%.0f px".format(p.w * dpr, p.h * dpr)
+            } ?: ""
+            val screen = bars?.let { b ->
+                (if (b.w != overlayW || b.h != overlayH) " (screen ${b.w}×${b.h})" else "") + ", status bar ${b.statusTop} px" + (if (b.navBottom > 0) ", navigation bar ${b.navBottom} px" else "")
+            } ?: ""
+            return "x ${a.limit.l}–${a.limit.r}, y ${a.limit.t}–${a.limit.b} of ${overlayW}×$overlayH$screen$page, " +
+                "${a.exclude.size} part(s) left out, offset %.0f, %.0f".format(c.offsetX, c.offsetY) + scale
+        }
+
+    /** The build of the plugin that is talking to the Bridge, when it names one (version, build). */
+    val pluginReported: kotlin.Pair<String, String?>? get() = PluginBundle.parseReported(state?.app)
+
+    /** Vaults whose plugin this Bridge updated when it started (their plugin folders), for the app's screen. */
+    @Volatile var pluginsUpdated: List<java.io.File> = emptyList()
+        private set
+
+    /** The page the firmware was last asked to draw on in Obsidian, in words: its area and the parts left out. */
+    val pageArea: String
+        get() {
+            val r = pageRequest ?: return "none yet (open an ink page with a pen selected)"
+            val l = r.limit
+            val sb = StringBuilder("x ${l.l}–${l.r}, y ${l.t}–${l.b} of ${overlayW}×$overlayH px")
+            r.surface?.let { v -> sb.append("; ink view x ${v.l}–${v.r}, y ${v.t}–${v.b}") }
+            if (r.exclude.isEmpty()) {
+                sb.append("; nothing left out")
+            } else {
+                sb.append("; ${r.exclude.size} part(s) left out: ")
+                sb.append(r.exclude.take(4).joinToString("; ") { "x ${it.l}–${it.r}, y ${it.t}–${it.b}" })
+                if (r.exclude.size > 4) sb.append("; …")
+            }
+            return sb.toString()
+        }
+
+    /** The strokes written in Obsidian since the Bridge started, in words: how many the firmware drew, and how many not. */
+    val strokeCounts: String
+        get() {
+            val sb = StringBuilder("$strokesWritten written with instant ink on: ${strokes.drawn} drawn by the firmware, ${strokes.missed} not")
+            if (strokesWhilePaused > 0) sb.append(", $strokesWhilePaused while it was paused")
+            if (strokesOffPage > 0) sb.append(", $strokesOffPage off the page")
+            return sb.toString()
+        }
+
+    /** The last strokes the firmware did not draw: where each began and why, newest first. */
+    val notDrawnLog: List<String> get() = notDrawn.reversed().map { it.why }
+
+    /** The last ink page in a few words, for the plugin's settings. */
+    private val sessionSummary: String
+        get() {
+            val sb = StringBuilder("page $pageArea. Strokes: $strokeCounts.")
+            notDrawn.lastOrNull()?.let { sb.append(" Last not drawn: ${it.why}.") }
+            return sb.toString()
+        }
+
+    /** How the page is placed on screen, in words (for the app's screen and the plugin's settings). */
+    val placement: String
+        get() {
+            val c = calibration
+            val w = state?.win
+            val s = state
+            return when {
+                c.fromWindow && c.windowSource == "size" && s?.vp != null -> {
+                    val vp = s.vp
+                    val sb = StringBuilder(
+                        "from Obsidian's window size (%.0f×%.0f px, starting %.0f px down the screen)".format(vp.w * s.dpr, vp.h * s.dpr, c.offsetY - c.correctionY + overlayTop),
+                    )
+                    if (c.correctionX != 0f || c.correctionY != 0f) {
+                        sb.append(", shifted by %.0f, %.0f px to where the firmware's pen-downs are".format(c.correctionX, c.correctionY))
+                    }
+                    c.checkedOff?.let { (x, y) -> sb.append("; the firmware's pen-downs are %.0f, %.0f px from it".format(x, y)) }
+                    eventsDisagree?.let { (x, y) -> sb.append("; Obsidian's events put the window %.0f, %.0f px from there (not used)".format(x, y)) }
+                    sb.toString()
+                }
+                c.fromWindow && w != null -> {
+                    val dpr = state?.dpr ?: 1f
+                    val sb = StringBuilder("from Obsidian's window (at %.0f, %.0f on the screen, %.0f×%.0f px)".format(w.x * dpr, w.y * dpr, w.w * dpr, w.h * dpr))
+                    if (c.correctionX != 0f || c.correctionY != 0f) {
+                        sb.append(", shifted by %.0f, %.0f px to where the firmware's pen-downs are".format(c.correctionX, c.correctionY))
+                    }
+                    c.checkedOff?.let { (x, y) -> sb.append("; the firmware's pen-downs are %.0f, %.0f px from it".format(x, y)) }
+                    sb.toString()
+                }
+                s != null && s.vp == null && c.calibrated ->
+                    "measured from strokes: this Ink Notebook is older than the Bridge and does not say where its window is – update Ink Notebook"
+                s != null && s.vp == null -> "estimated (below the status bar): this Ink Notebook is older than the Bridge – update Ink Notebook"
+                c.fromWindow -> "from Obsidian's window, as it last said (its events disagree just now: has the window moved?)"
+                c.calibrated -> "measured from strokes: ${noFit(s)}"
+                else -> "estimated (below the status bar): ${noFit(s)}"
+            }
+        }
+
+    /** Why the window's size did not say where it is, with the numbers (to tell what layout the tablet has). */
+    private fun noFit(s: BridgeState?): String {
+        val vp = s?.vp ?: return "Obsidian has not said where its window is"
+        val b = bars ?: return "the screen's bars are not known yet"
+        return "Obsidian's window (%.0f×%.0f px) fits no full-screen layout of the %d×%d screen (status bar %d px, navigation bar %d px), and its events do not say where it is"
+            .format(vp.w * s.dpr, vp.h * s.dpr, b.w, b.h, b.statusTop, b.navBottom)
+    }
+
+    /** Place Obsidian's page again: from its window when it says where that is, else from the next pen-downs. */
+    private fun recalibrate() {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(calibrationKey()).remove(correctionKey()).apply()
+        calibration.reset(0f, guessOffsetY())
+        state?.let { place(it) }
+        applied = null
+        applyNow()
+        report()
+    }
+
+    /** A hover from another thread waits for the main thread (hovers come hundreds of times a second: one at a time). */
+    private val hoverPending = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var hoverX = 0f
+    @Volatile private var hoverY = 0f
+
+    /** Run on the main thread (the SDK calls back on it, through its view; other pen engines may not). */
+    private inline fun onMain(crossinline block: () -> Unit) {
+        if (Looper.myLooper() === Looper.getMainLooper()) block() else main.post { block() }
+    }
+
+    private val callback = object : RawInputCallback() {
+        override fun onBeginRawDrawing(b: Boolean, p: TouchPoint?) {
+            // first, on the pen reader's thread: no hover report still on its way may switch the firmware on now
+            penIsDown = true
+            penStrokes++
+            val t = System.currentTimeMillis()
+            val x = p?.x
+            val y = p?.y
+            onMain {
+                gate.penDown()
+                strokes.firmwareDown(t)
+                if (x != null && y != null) {
+                    calibration.recordRaw(x, y, t)
+                    // a pen-down the firmware reports over a card or away from the page: it does not draw there
+                    val r = applied
+                    if (enabled && r != null && testHelper == null && zoneOf(x, y, r) == InkGate.Zone.AWAY) {
+                        gate.missed()
+                        helper?.let { syncInk(it) }
+                    }
+                }
+            }
+        }
+
+        override fun onEndRawDrawing(b: Boolean, p: TouchPoint?) {
+            penIsDown = false
+            onMain {
+                lateThisStroke = false
+                gate.penUp()
+                helper?.let { syncInk(it) }
+            }
+        }
+        override fun onRawDrawingTouchPointMoveReceived(p: TouchPoint?) {}
+        override fun onRawDrawingTouchPointListReceived(list: TouchPointList?) {}
+        override fun onBeginRawErasing(b: Boolean, p: TouchPoint?) {}
+        override fun onEndRawErasing(b: Boolean, p: TouchPoint?) {}
+        override fun onRawErasingTouchPointMoveReceived(p: TouchPoint?) {}
+        override fun onRawErasingTouchPointListReceived(list: TouchPointList?) {}
+
+        // The pen hovers. This comes hundreds of times a second: the check is cheap, and the
+        // firmware is only called when the gate changes its mind (a flood of firmware calls here
+        // once held up the plugin's pen and colour changes for seconds).
+        override fun onPenActive(point: TouchPoint?) {
+            penHovers++
+            // hovering, so not touching (also after a pen-up that was not reported); a pause in the
+            // reports means the pen touched something or went out of reach
+            val now = System.currentTimeMillis()
+            if (now - lastHoverAt > HOVER_GAP_MS) hoverGap.set(true)
+            lastHoverAt = now
+            penIsDown = false
+            val p = point ?: return
+            if (Looper.myLooper() === Looper.getMainLooper()) {
+                onHover(p.x, p.y)
+                return
+            }
+            hoverX = p.x
+            hoverY = p.y
+            if (!hoverPending.compareAndSet(false, true)) return
+            main.post {
+                hoverPending.set(false)
+                onHover(hoverX, hoverY)
+            }
+        }
+
+        // The pen was lifted: nothing to do. The firmware's ink stays where Obsidian draws the same
+        // stroke until the panel shows Obsidian again (the pen goes to a toolbar, the page changes).
+        // Turning the layer off here, as Boox Rapid Draw does, repaints the whole area after every
+        // stroke.
+        override fun onPenUpRefresh(refreshRect: RectF?) {}
+    }
+
+    // ------------------------------------------------------------------ status
+
+    private fun report(force: Boolean = false) {
+        val c = calibration
+        val json = BridgeState.status(
+            enabled, c.calibrated, c.offsetX, c.offsetY, transport, error, state?.seq ?: 0, penHovers, penStrokes,
+            paused = gate.reason, missed = strokes.missed, lastMissed = strokes.lastMissed, area = drawingArea,
+            placement = placement,
+            lateSwitchOns = lateSwitchOns,
+            pluginBuild = PluginBundle.bundled(this)?.build,
+            session = if (pageRequest != null) sessionSummary else null,
+        )
+        socket?.send(json)
+        val key = "$enabled|${c.calibrated}|${c.fromWindow}|${c.correctionX},${c.correctionY}|$transport|$error|$penStrokes|${strokes.missed}|$lateSwitchOns"
+        val now = System.currentTimeMillis()
+        if (force || key != lastStatusKey || now - lastStatusWrite > STATUS_EVERY_MS) {
+            file?.writeStatus(json)
+            lastStatusKey = key
+            lastStatusWrite = now
+        }
+    }
+
+    private fun startInForeground() {
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        nm.createNotificationChannel(NotificationChannel(CHANNEL, "Ink Notebook Bridge", NotificationManager.IMPORTANCE_LOW))
+        val stop = PendingIntent.getService(
+            this,
+            0,
+            Intent(this, BridgeService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val openApp = PendingIntent.getActivity(
+            this,
+            1,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val n = Notification.Builder(this, CHANNEL)
+            .setContentTitle("Ink Notebook Bridge")
+            .setContentText("Instant ink on Ink Notebook pages")
+            .setSmallIcon(R.drawable.ic_bridge)
+            .setContentIntent(openApp)
+            .addAction(Notification.Action.Builder(null, "Stop", stop).build())
+            .setOngoing(true)
+            .build()
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIFICATION_ID, n)
+        }
+    }
+
+    companion object {
+        const val ACTION_STOP = "io.github.stefanmayer06.inkbridge.STOP"
+        const val ACTION_RESCAN = "io.github.stefanmayer06.inkbridge.RESCAN"
+        const val ACTION_TEST = "io.github.stefanmayer06.inkbridge.TEST"
+        const val ACTION_RECALIBRATE = "io.github.stefanmayer06.inkbridge.RECALIBRATE"
+        private const val CHANNEL = "bridge"
+        private const val NOTIFICATION_ID = 1
+        private const val PREFS = "bridge"
+        private const val LEASE_CHECK_MS = 500L
+        /** Without hover reports, the firmware draws again this long after it paused. */
+        private const val NO_HOVER_RELEASE_MS = 300L
+        /** Hover reports further apart than this mean the pen touched something (or went out of reach) in between. */
+        private const val HOVER_GAP_MS = 40L
+        /** A missed stroke this far inside the drawing area (px) means the placement is wrong. */
+        private const val INSIDE_MARGIN_PX = 40
+        /** With the page placed from Obsidian's window, a pen-down this far inside the page (px) must be drawn by the firmware. */
+        private const val ON_PAGE_MARGIN_PX = 2
+        /** Strokes the firmware did not draw that are kept for the app's screen. */
+        private const val MISSES_KEPT = 5
+        /** Parts once left out that are kept, to tell a stroke the firmware did not draw where one was. */
+        private const val PAST_EXCLUDES_KEPT = 8
+        private const val STATUS_EVERY_MS = 5_000L
+        const val TEST_MS = 30_000L
+        const val EXTRA_FEATURE = "feature"
+        /** TouchHelper.FEATURE_APP_PEN_TOUCH_RENDER (SDK 1.5.9). */
+        const val FEATURE_APP_PEN = 4
+
+        fun testNameOf(feature: Int) = when (feature) {
+            TouchHelper.FEATURE_SF_TOUCH_RENDER -> "1 (firmware reads the pen)"
+            FEATURE_APP_PEN -> "2 (Bridge hands on the pen, pen mode)"
+            TouchHelper.FEATURE_APP_TOUCH_RENDER -> "3 (Bridge hands on the pen, touch mode)"
+            else -> "$feature"
+        }
+
+        @Volatile
+        var instance: BridgeService? = null
+            private set
+    }
+}
+
+private fun PxRect.toRect() = Rect(l, t, r, b)
