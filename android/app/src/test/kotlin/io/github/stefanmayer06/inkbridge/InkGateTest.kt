@@ -248,6 +248,23 @@ class InkGateTest {
     }
 
     @Test
+    fun nothingLeftOutIsStillSaidToTheFirmware() {
+        // the SDK ignores an empty list, so what was left out before (a card that has closed) would
+        // stay left out: "nothing" is one rectangle too small to matter, at the corner of the area
+        val limit = PxRect(0, 342, 1860, 2478)
+        val nothing = excludeForFirmware(limit, emptyList())
+        assertEquals(listOf(PxRect(0, 342, 2, 344)), nothing)
+        assertTrue(nothing.single().intersects(limit))
+        // where the pen card had been (and anywhere else on the page) the firmware draws again
+        val card = PxRect(7, 331, 840, 1185)
+        assertFalse(nothing.single().intersects(PxRect(card.l + 2, card.t + 20, card.r, card.b)))
+        // real parts left out are passed on as they are
+        assertEquals(listOf(card), excludeForFirmware(limit, listOf(card)))
+        // the self-test's whole screen: two pixels in its corner
+        assertEquals(listOf(PxRect(0, 0, 2, 2)), excludeForFirmware(PxRect(0, 0, 1860, 2480), emptyList()))
+    }
+
+    @Test
     fun zones() {
         val r = FirmwareRequest(
             limit = PxRect(0, 100, 1000, 1500),

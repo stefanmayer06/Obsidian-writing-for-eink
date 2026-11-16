@@ -210,6 +210,16 @@ function startBridge() {
     await page.mouse.click(5, VIEW.height - 5);
     await page.waitForTimeout(200);
 
+    // the card has closed: the firmware must be told so. Onyx's SDK ignores an empty list of parts
+    // left out (the card's place stayed a dead spot on the page), so "nothing" is one tiny rectangle
+    f = await waitFw((m) => m.armed && m.exclude.length === 0);
+    const tiny = f?.sent?.[0];
+    check(
+      "the card closed: the firmware is told its place is free again (never an empty list, which the SDK ignores)",
+      f?.sent?.length === 1 && tiny[2] - tiny[0] <= 2 && tiny[3] - tiny[1] <= 2 && tiny[0] === f.limit[0] && tiny[1] === f.limit[1],
+      JSON.stringify({ exclude: f?.exclude, sent: f?.sent, limit: f?.limit }),
+    );
+
     // a pen press on a toolbar button: the Bridge hears of it the moment the press starts, before the
     // tool changes (it pauses the firmware, so the panel shows the change at its normal speed)
     const uiBefore = (await last())?.ui ?? 0;

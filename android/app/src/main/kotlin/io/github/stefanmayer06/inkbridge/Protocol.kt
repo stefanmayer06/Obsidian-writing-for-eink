@@ -273,5 +273,5 @@ data class BridgeState(
 
 /** The app version without depending on generated BuildConfig in unit tests. */
 object BuildConfigInfo {
-    const val VERSION_NAME = "0.12.0"
+    const val VERSION_NAME = "0.13.0"
 }

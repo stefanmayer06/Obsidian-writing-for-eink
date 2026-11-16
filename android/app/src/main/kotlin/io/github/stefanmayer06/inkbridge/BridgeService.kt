@@ -504,7 +504,16 @@ class BridgeService : Service() {
                 when {
                     ex != null -> "under a part left out (x ${ex.l}–${ex.r}, y ${ex.t}–${ex.b})"
                     !l.contains(x, y) -> "outside the firmware's area (x ${l.l}–${l.r}, y ${l.t}–${l.b})"
-                    else -> "inside the firmware's area"
+                    else -> {
+                        // where something was left out before (a card that has closed): the firmware should draw there again
+                        val past = pastExcludes.lastOrNull { it.first.contains(x, y) }
+                        if (past == null) {
+                            "inside the firmware's area"
+                        } else {
+                            val p = past.first
+                            "inside the firmware's area, where a part was left out until %d s before (x %d–%d, y %d–%d)".format((d.t - past.second) / 1000, p.l, p.r, p.t, p.b)
+                        }
+                    }
                 }
             }
         }
@@ -607,7 +616,7 @@ class BridgeService : Service() {
         }
         try {
             h.openRawDrawing()
-            h.setLimitRect(Rect(0, 0, overlayW, overlayH), emptyList())
+            setArea(h, PxRect(0, 0, overlayW, overlayH), emptyList())
             h.setRawInputReaderEnable(true)
             h.setRawDrawingEnabled(true)
             h.setStrokeStyle(BridgeState.STYLE_PENCIL)
@@ -645,7 +654,7 @@ class BridgeService : Service() {
         if (rawOpen || overlayW == 0) return
         try {
             h.openRawDrawing()
-            h.setLimitRect(Rect(0, 0, overlayW, overlayH), emptyList())
+            setArea(h, PxRect(0, 0, overlayW, overlayH), emptyList())
             // drawn only while the plugin asks: paused (opening leaves the firmware "started", not paused)
             h.forceSetRawDrawingEnabled(false)
             rawOpen = true
@@ -697,8 +706,16 @@ class BridgeService : Service() {
                 return
             }
             val cur = applied
-            if (cur == null || cur.limit != target.limit || cur.exclude != target.exclude) {
-                h.setLimitRect(target.limit.toRect(), target.exclude.map { it.toRect() })
+            // also whenever instant ink is switched on: the firmware is told its area afresh each time
+            if (cur == null || cur.limit != target.limit || cur.exclude != target.exclude || !enabled) {
+                // what was left out and no longer is: kept for the app's screen (a stroke the firmware
+                // does not draw there means the firmware did not take the change)
+                if (cur != null) {
+                    val now = System.currentTimeMillis()
+                    for (old in cur.exclude) if (old !in target.exclude) pastExcludes.addLast(kotlin.Pair(old, now))
+                    while (pastExcludes.size > PAST_EXCLUDES_KEPT) pastExcludes.removeFirst()
+                }
+                setArea(h, target.limit, target.exclude)
             }
             if (!enabled) {
                 // the pen reader runs; the firmware draws from the pen's first hover over the page
@@ -717,6 +734,18 @@ class BridgeService : Service() {
             applied = null
         }
     }
+
+    /**
+     * Tell the firmware where to draw and what to leave out. Never with an empty list of parts left
+     * out: the SDK ignores an empty list, and what was left out before would stay left out
+     * ([excludeForFirmware]).
+     */
+    private fun setArea(h: TouchHelper, limit: PxRect, exclude: List<PxRect>) {
+        h.setLimitRect(limit.toRect(), excludeForFirmware(limit, exclude).map { it.toRect() })
+    }
+
+    /** Parts that were left out of the drawing area and no longer are, with when that ended (the last few). */
+    private val pastExcludes = ArrayDeque<kotlin.Pair<PxRect, Long>>()
 
     /**
      * The firmware draws or pauses as [gate] says. Pausing takes the panel out of its handwriting
@@ -1061,6 +1090,8 @@ class BridgeService : Service() {
         private const val ON_PAGE_MARGIN_PX = 2
         /** Strokes the firmware did not draw that are kept for the app's screen. */
         private const val MISSES_KEPT = 5
+        /** Parts once left out that are kept, to tell a stroke the firmware did not draw where one was. */
+        private const val PAST_EXCLUDES_KEPT = 8
         private const val STATUS_EVERY_MS = 5_000L
         const val TEST_MS = 30_000L
         const val EXTRA_FEATURE = "feature"
