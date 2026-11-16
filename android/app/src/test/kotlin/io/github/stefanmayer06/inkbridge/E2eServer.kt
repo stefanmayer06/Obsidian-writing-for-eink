@@ -63,6 +63,8 @@ object E2eServer {
                 o.put("refreshMs", req.refreshMs)
                 o.put("sideButton", req.sideButton)
                 req.surface?.let { o.put("surface", arr(it)) }
+                // what the firmware is told is left out: never an empty list (the SDK ignores one)
+                o.put("sent", JSONArray(excludeForFirmware(req.limit, req.exclude).map { arr(it) }))
             }
             server.send(o.toString())
             server.send(BridgeState.status(req != null, cal.calibrated, cal.offsetX, cal.offsetY, "socket", null, state?.seq ?: 0))

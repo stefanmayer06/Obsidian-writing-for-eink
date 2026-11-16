@@ -38,6 +38,23 @@ data class FirmwareRequest(
     val page: PxRect = limit,
 )
 
+/** The side (px) of the rectangle that says "nothing left out" to the firmware ([excludeForFirmware]). */
+const val NOTHING_LEFT_OUT_PX = 2
+
+/**
+ * The parts left out of the drawing area, as the firmware has to be told them.
+ *
+ * Onyx's pen SDK does nothing at all when given an empty list (`RawInputReader.setExcludeRect`
+ * returns at once for a list of size 0): the parts left out before stay left out, in its pen reader
+ * and in the firmware. After a pen card over the page closed, the firmware went on not drawing where
+ * the card had been, and its pen reader went on not reporting pen-downs there – a dead spot on the
+ * page until something else was left out. So "nothing left out" is said with one rectangle too small
+ * to matter, two pixels at the corner of the drawing area: a list the SDK passes on, which replaces
+ * the old one.
+ */
+fun excludeForFirmware(limit: PxRect, exclude: List<PxRect>): List<PxRect> =
+    exclude.ifEmpty { listOf(PxRect(limit.l, limit.t, limit.l + NOTHING_LEFT_OUT_PX, limit.t + NOTHING_LEFT_OUT_PX)) }
+
 /**
  * Where Obsidian's window starts in the overlay's pixels, from the plugin's report ([WindowGeom], CSS
  * pixels on the screen) and where the overlay starts on the screen.
