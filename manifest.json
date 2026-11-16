@@ -1,7 +1,7 @@
 {
   "id": "ink-notebook",
   "name": "Ink Notebook",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "minAppVersion": "1.8.7",
   "description": "Handwritten notebooks like the Boox Notes app – a fast pen engine for e-ink tablets with pens, highlighter, erasers, lasso, shapes and paper templates – and your handwriting as text with Azure OCR, live diagrams, PDF annotation and papers from arXiv.",
   "author": "Stefan Mayer",
