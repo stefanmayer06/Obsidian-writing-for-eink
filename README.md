@@ -2,7 +2,7 @@
 
 **Handwritten notebooks in Obsidian that feel like the Boox Notes app – made for e‑ink tablets such as the Onyx Boox Note Air.** Write with the pen on paper pages, flip to the **Text** page and read the same notes as Markdown: handwriting transcribed, drawings shown live, links working like everywhere else in Obsidian.
 
-Ink Notebook is free, needs no account and works offline. It has its own pen engine that draws every stroke the moment the pen moves, so it stays fast on e‑ink screens and on pages full of writing – there is nothing else to install. On a Boox, the optional **Ink Notebook Bridge** app makes your writing appear with no lag at all, like in Boox Notes (beta – see [Instant ink on a Boox](#instant-ink-on-a-boox-beta)).
+Ink Notebook is free, needs no account and works offline. It has its own pen engine that draws every stroke the moment the pen moves, so it stays fast on e‑ink screens and on pages full of writing – there is nothing else to install. **New in 3.0:** on a Boox, the optional **Ink Notebook Bridge** app makes your writing appear with no lag at all, like in Boox Notes (beta – see [Instant ink on a Boox](#instant-ink-on-a-boox-beta)).
 
 ▶ **[Watch the 40-second demo video](docs/ink-notebook-promo.mp4)**
 
@@ -21,10 +21,13 @@ Ink Notebook is free, needs no account and works offline. It has its own pen eng
 
 ## What's new
 
-**Coming in the next release** – already in the [test build](https://github.com/stefanmayer06/Obsidian-writing-for-eink/releases/tag/test-build):
+### 3.0
 
-- **Instant ink on a Boox (beta).** The new Ink Notebook Bridge app lets the Boox firmware draw your writing straight onto the screen, as fast as in the Boox Notes app. See [Instant ink on a Boox](#instant-ink-on-a-boox-beta).
-- **Mermaid links as smooth curves.** Links in Mermaid diagrams are now drawn as curves, the way Mermaid draws them, and stay curved when you move a shape. Mermaid's `curve` setting gives you right angles or straight lines instead. Several links into one shape each get their own place on it, and labels no longer spill out of wide shapes.
+- **Instant ink on a Boox (beta).** The new **Ink Notebook Bridge** app, a free companion app for Boox tablets, lets the Boox firmware draw your writing straight onto the screen – as fast as in the Boox Notes app – while Ink Notebook saves every stroke as always. Download it from the [latest release](https://github.com/stefanmayer06/Obsidian-writing-for-eink/releases/latest), start it once, and Ink Notebook connects to it by itself. It only draws over the ink page, never over toolbars, menus or other apps. See [Instant ink on a Boox](#instant-ink-on-a-boox-beta).
+- **New settings: *Instant ink on Boox*.** Turn instant ink on or off, see whether the Bridge app is connected and which build of Ink Notebook is running, and start the Bridge or get the app with one tap.
+- **Mermaid links as smooth curves.** Links in Mermaid diagrams are drawn as curves, the way Mermaid draws them, and stay curved when you move a shape. Mermaid's `curve` setting gives you right angles or straight lines instead. Several links into one shape each get their own place on it, and labels no longer spill out of wide shapes.
+
+### Earlier versions
 
 **2.3** – Mermaid flowcharts in the object library, turned into ink. Ink Notebook's settings show up in Obsidian's settings search (Obsidian 1.13 and newer). Handwriting recognition always uses your own free Azure key: the paid *Ink Notebook Cloud* option was removed.
 
@@ -51,6 +54,8 @@ Taken in Obsidian with Ink Notebook. (The handwriting was generated from a scrip
 | ![Papers from arXiv: the most popular papers, each with its authors, date, abstract and an Import button](docs/arxiv.png) | ![A flowchart from the object library: shapes with typed labels, attached arrows, a filled decision, a hatched box and a handwritten note](docs/flowchart.png) |
 | **Adding a Mermaid diagram** | **A Mermaid diagram on the page** |
 | ![The dialog: Mermaid code taken from a note, shown as ink, with its shapes and arrows counted](docs/mermaid-dialog.png) | ![A Mermaid flowchart placed as ink: a subgraph, coloured shapes with labels, attached arrows, the Mermaid library next to it](docs/mermaid.png) |
+
+The Ink Notebook Bridge app for instant ink on a Boox is shown under [Instant ink on a Boox](#instant-ink-on-a-boox-beta).
 
 ## Installation
 
@@ -184,15 +189,18 @@ From an ink page, *Insert → Pages of a paper from arXiv…* adds a paper's pag
 
 Any app's own drawing on an e‑ink screen lags a little behind the pen. Boox Notes avoids that because the Boox **firmware** draws the stroke straight onto the screen – and a plugin can't reach the firmware. The free **Ink Notebook Bridge** app can: it lets the firmware draw over your ink page, so your writing appears as fast as in Boox Notes. Ink Notebook still saves every stroke as always and shows its own drawing of it when you pause.
 
-> **Beta.** Instant ink is new and has been tried on a Boox Note Air 6C so far. Until the next release it is in the [test build](https://github.com/stefanmayer06/Obsidian-writing-for-eink/releases/tag/test-build): the Bridge app there brings the matching Ink Notebook with it (step 4). Feedback from other Boox models is very welcome – please [open an issue](https://github.com/stefanmayer06/Obsidian-writing-for-eink/issues).
+> **Beta.** Instant ink is new in 3.0 and has been tried on a Boox Note Air 6C so far. Feedback from other Boox models is very welcome – please [open an issue](https://github.com/stefanmayer06/Obsidian-writing-for-eink/issues).
 
 **Set it up**
 
-1. On the Boox, download `ink-notebook-bridge.apk` from the [releases](https://github.com/stefanmayer06/Obsidian-writing-for-eink/releases) and install it. If the launcher shows a snowflake on it, unfreeze it.
+1. On the Boox, download `ink-notebook-bridge.apk` from the [latest release](https://github.com/stefanmayer06/Obsidian-writing-for-eink/releases/latest) and install it. If the launcher shows a snowflake on it, unfreeze it.
 2. Open **Ink Notebook Bridge** and allow **Display over other apps** and **Access to files** (it finds your vault through them). Keep your vault in the device storage, not in Obsidian's app storage.
 3. Tap **Start the Bridge**. It starts again by itself after the tablet restarts.
 4. If the app says *Ink Notebook in … is older than this Bridge*, tap **Update Ink Notebook in the vault**, then restart Obsidian (swipe it away in the app switcher and open it again). The app and the plugin are made together and have to be the same build. After the first time, the app keeps them matched by itself whenever it starts (you can turn that off in the app).
 5. Open an ink page and write. *Settings → Ink Notebook → Instant ink on Boox* says **Connected**.
+
+<p align="center"><img src="docs/bridge.png" width="540" alt="The Ink Notebook Bridge app, set up: Ink Notebook 3.0.0 in the vault matches the Bridge and is kept matched; display over other apps, access to files and the notification are allowed; the vault Documents/Notes was found; buttons to add a vault folder and to start the Bridge"></p>
+<p align="center"><em>The Ink Notebook Bridge app, ready to start: both permissions allowed, the vault found, and the Ink Notebook in it matching the app.</em></p>
 
 To check that instant ink works on your tablet without Obsidian, tap **Test 1** in the Bridge app: for 30 seconds the ink should follow the pen across the whole screen with no lag.
 
