@@ -116,8 +116,8 @@ function onTop(doc: Document, el: Element, r: CssRect): boolean {
 
 function isEditable(el: Element | null): boolean {
   if (!el) return false;
-  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return true;
-  return el instanceof HTMLElement && el.isContentEditable;
+  if (el.instanceOf(HTMLInputElement) || el.instanceOf(HTMLTextAreaElement)) return true;
+  return el.instanceOf(HTMLElement) && el.isContentEditable;
 }
 
 /** Where the page is in the window (CSS pixels): all of it, also what lies past the ink view when zoomed in. */
@@ -367,11 +367,7 @@ export class FastInkBridge {
     p.registerDomEvent(document, "click", () => this.pressClicked(), { capture: true, passive: true });
     // the safe area at the top of the window, for the Bridge (made before the observer below, so it
     // does not count as one of Obsidian's pop-ups coming and going)
-    const probe = document.createElement("div");
-    probe.className = "ink-safe-area-probe";
-    probe.style.cssText = "position:fixed;left:0;top:0;width:0;height:env(safe-area-inset-top, 0px);visibility:hidden;pointer-events:none";
-    document.body.appendChild(probe);
-    this.safeProbe = probe;
+    this.safeProbe = document.body.createDiv({ cls: "ink-safe-area-probe" });
     // Obsidian's menus, modals and notices come and go as children of <body>
     this.observer = new MutationObserver(() => this.update());
     this.observer.observe(document.body, { childList: true });
@@ -390,7 +386,7 @@ export class FastInkBridge {
     this.safeProbe = null;
     if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
     if (this.pressTimer !== null) window.clearTimeout(this.pressTimer);
-    if (this.frame) cancelAnimationFrame(this.frame);
+    if (this.frame) window.cancelAnimationFrame(this.frame);
     const ws = this.socket;
     this.socket = null;
     this.socketOpen = false;
@@ -400,7 +396,7 @@ export class FastInkBridge {
   /** Something about the page may have changed: tell the Bridge (once per frame). */
   update(): void {
     if (this.destroyed || this.frame || !this.enabled) return;
-    this.frame = requestAnimationFrame(() => {
+    this.frame = window.requestAnimationFrame(() => {
       this.frame = 0;
       this.send(false);
     });
@@ -520,7 +516,7 @@ export class FastInkBridge {
     if (!surface) return;
     // the palm, while the pen writes or hovers
     if (surface.input.busy || (e.pointerType === "touch" && now - this.lastPenAt < PALM_MS)) return;
-    const target = e.target instanceof Element ? e.target : null;
+    const target = e.targetNode?.instanceOf(Element) ? e.targetNode : null;
     // on the page itself: writing, a swipe, a pinch – not a press elsewhere
     if (target && surface.el.contains(target) && !target.closest(UI_SELECTOR)) return;
     this.uiCount++;

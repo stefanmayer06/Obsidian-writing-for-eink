@@ -7,7 +7,9 @@ import type { ToolId } from "./types";
 
 /**
  * Routes pointer input like the Boox Notes app:
- *  - the pen writes with the selected tool; its eraser end (or the side button) erases
+ *  - the pen writes with the selected tool; its eraser end (or the side button) erases.
+ *    On Android (Samsung S Pen, Boox) the side button is only reported while the pen hovers,
+ *    so it counts when it is held as the pen touches the screen
  *  - fingers turn pages (swipe), pan and zoom (pinch); two-finger tap undoes,
  *    three-finger tap redoes; a finger never writes unless finger drawing is on
  *  - touches while the pen is near the screen are ignored (palm rejection)
@@ -43,6 +45,8 @@ interface Gesture {
 }
 
 const PALM_MS = 700;
+/** How long what the hovering pen last reported still tells whether its side button is held. */
+const HOVER_BUTTON_MS = 1000;
 const TAP_MS = 320;
 const TAP_PX = 12;
 
@@ -51,6 +55,8 @@ export class InputRouter {
   private sessionPointer = -1;
   private rect: DOMRect | null = null;
   private lastPenTime = 0;
+  /** The pen's buttons when it last hovered above the screen, and when (performance.now()). */
+  private penHover = { buttons: 0, t: -Infinity };
   private usingRaw = false;
   private touches = new Map<number, TouchInfo>();
   private gesture: Gesture | null = null;
@@ -139,7 +145,7 @@ export class InputRouter {
   private toolFor(e: PointerEvent): ToolId | "none" {
     if (e.pointerType === "pen") {
       if ((e.buttons & 32) !== 0 || e.button === 5) return "eraser";
-      if ((e.buttons & 2) !== 0 || e.button === 2) {
+      if ((e.buttons & 2) !== 0 || e.button === 2 || this.sideButtonHovered()) {
         const a = this.s.settings.sideButton;
         return a === "none" ? this.s.tools.tool : a;
       }
@@ -147,6 +153,22 @@ export class InputRouter {
       return "none";
     }
     return this.s.tools.tool;
+  }
+
+  /**
+   * Remember the buttons of a hovering pen. Chromium on Android (Obsidian's WebView) never
+   * reports the side button while the pen touches the screen – a pen down always has
+   * buttons 1 – but while it hovers it does, as the left button (crbug.com/816504).
+   */
+  private trackHover(e: PointerEvent, now: number): void {
+    if (e.pressure !== 0 || e.pointerId === this.sessionPointer || e.pointerId === this.link?.pointer) return;
+    this.penHover.buttons = e.buttons;
+    this.penHover.t = now;
+  }
+
+  /** The hovering pen had a button held just before it touched the screen (Android). */
+  private sideButtonHovered(): boolean {
+    return this.penHover.buttons !== 0 && performance.now() - this.penHover.t < HOVER_BUTTON_MS;
   }
 
   /** A link chip (or handwritten link badge) under the point. */
@@ -243,7 +265,10 @@ export class InputRouter {
   }
 
   private onMove(e: PointerEvent, raw: boolean): void {
-    if (e.pointerType === "pen") this.lastPenTime = performance.now();
+    if (e.pointerType === "pen") {
+      this.lastPenTime = performance.now();
+      this.trackHover(e, this.lastPenTime);
+    }
     if (this.mousePan && e.pointerId === this.mousePan.pointer) {
       const v = this.s.view;
       this.s.view = { ...v, ox: this.mousePan.ox + e.clientX - this.mousePan.x, oy: this.mousePan.oy + e.clientY - this.mousePan.y };

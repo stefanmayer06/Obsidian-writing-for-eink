@@ -792,11 +792,6 @@
   font-weight: 600;
   line-height: 1;
   cursor: pointer;
-  /* ribbon with a swallowtail notch pointing into the page. (caniuse lists
-     clip-path as "partially supported" in Chromium only because it cannot
-     clip to a shape in an external SVG file; shapes like this polygon() work
-     in every Chromium – and every Obsidian – version.) */
-  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, var(--ink-notch) 50%);
   transition: padding-left 120ms ease;
 }
 
@@ -809,7 +804,32 @@
   left: 2px;
   right: 0;
   background: var(--ink-ribbon-paper);
-  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, calc(var(--ink-notch) - 1px) 50%);
+}
+
+/* the ribbon's swallowtail notch pointing into the page: a mask cuts it out
+   of the ribbon and, 1px narrower, out of its paper-coloured inside. The mask
+   is a rectangle right of the notch and two half-height triangles left of it
+   (each a diagonal gradient, softened by half a pixel so the edge is not
+   jagged). The -webkit- copies are for Android WebViews older than Chromium
+   120. */
+.ink-bookmarks .ink-bookmark,
+.ink-bookmarks .ink-bookmark::before {
+  --ink-cut: var(--ink-notch);
+  --ink-cut-mask: linear-gradient(#000, #000),
+    linear-gradient(to top right, transparent calc(50% - 0.25px), #000 calc(50% + 0.25px)),
+    linear-gradient(to bottom right, transparent calc(50% - 0.25px), #000 calc(50% + 0.25px));
+  -webkit-mask-image: var(--ink-cut-mask);
+  -webkit-mask-position: right, left top, left bottom;
+  -webkit-mask-size: calc(100% - var(--ink-cut)) 100%, var(--ink-cut) 50%, var(--ink-cut) 50%;
+  -webkit-mask-repeat: no-repeat;
+  mask-image: var(--ink-cut-mask);
+  mask-position: right, left top, left bottom;
+  mask-size: calc(100% - var(--ink-cut)) 100%, var(--ink-cut) 50%, var(--ink-cut) 50%;
+  mask-repeat: no-repeat;
+}
+
+.ink-bookmarks .ink-bookmark::before {
+  --ink-cut: calc(var(--ink-notch) - 1px);
 }
 
 .ink-bookmarks .ink-bookmark > * {
@@ -1822,16 +1842,18 @@ canvas.ink-preview-page {
 
 /* Movement smears on e-ink screens, so e-ink mode turns off every animation
    and shadow – also Obsidian's, a theme's and other plugins'. Most of them do
-   not use the --anim-duration-* or shadow variables, and their selectors are
-   more specific than any one rule here, so only !important reaches them all. */
-body.ink-eink *,
-body.ink-eink *::before,
-body.ink-eink *::after {
-  transition: none !important;
-  animation: none !important;
-  scroll-behavior: auto !important;
-  box-shadow: none !important;
-  text-shadow: none !important;
+   not use the --anim-duration-* or shadow variables, so this rule has to win
+   over their selectors: the two :not(#…) match every element (no element has
+   that id) and give it the weight of two ids, which outweighs the selectors
+   of Obsidian, themes and plugins (they hardly ever use ids). */
+body.ink-eink :not(#ink-eink-none):not(#ink-eink-none),
+body.ink-eink :not(#ink-eink-none):not(#ink-eink-none)::before,
+body.ink-eink :not(#ink-eink-none):not(#ink-eink-none)::after {
+  transition: none;
+  animation: none;
+  scroll-behavior: auto;
+  box-shadow: none;
+  text-shadow: none;
 }
 
 body.ink-eink.theme-light {
@@ -1937,4 +1959,18 @@ body.ink-large-targets .ink-settings button {
 
 body.ink-large-targets .ink-paper-grid {
   gap: 12px;
+}
+
+/* ---------- Instant ink -------------------------------------------------- */
+
+/* an invisible element whose height is the safe area at the top of the window
+   (under a status bar or notch), measured for the Bridge app */
+.ink-safe-area-probe {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: env(safe-area-inset-top, 0px);
+  visibility: hidden;
+  pointer-events: none;
 }

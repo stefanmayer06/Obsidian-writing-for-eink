@@ -1,7 +1,8 @@
 /**
  * The few DOM helpers of Obsidian that the ink engine uses (createEl,
- * createDiv, createSpan on nodes and as globals), for running it outside
- * Obsidian in the dev harness. Import it before the engine.
+ * createDiv, createSpan on nodes and as globals, instanceOf on nodes,
+ * targetNode on events), for running it outside Obsidian in the dev harness.
+ * Import it before the engine.
  */
 type Info = { cls?: string | string[]; text?: string; attr?: Record<string, string | number | boolean | null>; parent?: Node; prepend?: boolean };
 
@@ -35,10 +36,18 @@ if (typeof g.createEl !== "function") {
     createSpan(this: Node, o?: Info | string) {
       return make(docOf(this), "span", withParent(this, o));
     },
+    instanceOf(this: Node, type: new () => unknown) {
+      return this instanceof type;
+    },
   });
   Object.assign(HTMLElement.prototype, {
     isShown(this: HTMLElement) {
       return this.getClientRects().length > 0;
+    },
+  });
+  Object.defineProperty(UIEvent.prototype, "targetNode", {
+    get(this: UIEvent) {
+      return this.target instanceof Node ? this.target : null;
     },
   });
 }

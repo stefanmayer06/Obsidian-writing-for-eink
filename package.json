@@ -1,6 +1,6 @@
 {
   "name": "ink-notebook",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Handwritten notebooks for Obsidian in the style of the Boox Notes app: a fast native ink engine for e-ink tablets, pens, highlighter, erasers, lasso, shapes, pages and templates, plus handwriting-to-text with Azure OCR, live diagram figures and PDF annotation.",
   "main": "main.js",
   "private": true,

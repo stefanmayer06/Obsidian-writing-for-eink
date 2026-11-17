@@ -33,6 +33,8 @@ The screenshots in `docs/` are taken in real Obsidian with the plugin (`e2e/scri
 
 `docs/ink-notebook-promo.mp4` is recorded the same way, in Obsidian's tablet layout at the size of a Boox Note Air (`e2e/promo/`).
 
+`docs/bridge.png` is the Bridge app's real setup screen (`MainActivity`), rendered off the tablet with Robolectric's native graphics: the permissions granted, a vault with the plugin build the app carries, and *keep matched* on. Because it is not taken on a Boox, it has stock Android's Material Light buttons and font rather than the Boox system's.
+
 ### Debugging
 
 In the developer console, `app.plugins.plugins["ink-notebook"].internals` exposes the recognition pipeline and the file reader.
