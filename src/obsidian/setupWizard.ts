@@ -67,7 +67,7 @@ export class SetupWizard extends Modal {
       );
     new Setting(step1)
       .setName("Pen side button")
-      .setDesc("Hold it to erase (the eraser end of the pen always erases).")
+      .setDesc("Hold it to erase (the eraser end of the pen always erases). On Android (Samsung S Pen, Boox), press it before the pen touches the screen.")
       .addDropdown((d) =>
         d
           .addOptions({ eraser: "Erase", lasso: "Lasso (select)", none: "Nothing" })

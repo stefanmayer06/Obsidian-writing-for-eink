@@ -197,7 +197,7 @@ flowchart TD
   G --> G3["2-finger tap → undo<br/>3-finger tap → redo"]
   K -- "pen · mouse" --> TF{"What does it do?"}
   TF -- "eraser end" --> ER
-  TF -- "side button" --> SB["eraser · lasso · nothing (setting)"]
+  TF -- "side button<br/>(Android: held while the pen hovered)" --> SB["eraser · lasso · nothing (setting)"]
   SB --> TS
   TF -- "tap on a link chip or handwritten link" --> LNK["Open the linked note"]
   TF -- "selected tool" --> TS["createSession(tool)"]
