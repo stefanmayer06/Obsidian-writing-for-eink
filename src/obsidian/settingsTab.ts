@@ -145,7 +145,7 @@ export class InkSettingTab extends PluginSettingTab {
         items: [
           {
             name: "Pen side button",
-            desc: "What holding the button on the side of the pen does (the eraser end of the pen always erases).",
+            desc: "What holding the button on the side of the pen does (the eraser end of the pen always erases). On Android (Samsung S Pen, Boox), press it before the pen touches the screen.",
             control: { type: "dropdown", key: "sideButton", options: { eraser: "Erase", lasso: "Lasso (select)", none: "Nothing" }, after: apply },
           },
           toggle("Draw with a finger", "Off: only the pen writes; fingers turn pages, scroll and zoom (best with a stylus – your palm can rest on the screen).", "fingerDrawing", true),

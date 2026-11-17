@@ -54,7 +54,14 @@ function check(name, cond, detail = "") {
     const base = { pointerType: "pen", button: opts.side ? "right" : "left", buttons, tiltX: 0, tiltY: 0 };
     const [x0, y0] = pts[0];
     const s0 = toScreen(x0, y0);
-    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: s0.x, y: s0.y, pointerType: "pen", buttons: 0, force: 0 });
+    if (opts.androidSide) {
+      // Android (S Pen, Boox): Chromium reports the side button only while the pen hovers – as
+      // the left button (buttons 1, pressure 0) – and a pen on the screen always has buttons 1
+      for (let i = 4; i >= 0; i--) {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: s0.x + i * 3, y: s0.y - i * 3, pointerType: "pen", buttons: 1, force: 0 });
+      }
+    }
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: s0.x, y: s0.y, pointerType: "pen", buttons: opts.androidSide ? 1 : 0, force: 0 });
     await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: s0.x, y: s0.y, clickCount: 1, force: opts.p ?? 0.5, ...base });
     for (let i = 1; i < pts.length; i++) {
       const s = toScreen(pts[i][0], pts[i][1]);
@@ -81,6 +88,9 @@ function check(name, cond, detail = "") {
     for (let i = 0; i <= 40; i++) pts.push([x + (w * i) / 40, y + h / 2 + (h / 2) * Math.sin(i * 0.9)]);
     return pts;
   };
+  // a stroke written straight down at x (the pen wrote instead of erasing)
+  const lineAt = (x) =>
+    page.evaluate((x) => window.surface.page.strokes.some((s) => s.pts.every((v, i) => i % 3 !== 0 || Math.abs(v - x) < 1)), x);
   const state = () =>
     page.evaluate(() => {
       const s = window.surface;
@@ -141,7 +151,27 @@ function check(name, cond, detail = "") {
   // across the second word of the first line: it is cut in two
   await pen(along([[300, 128], [300, 188]], 4), { side: true });
   st = await state();
-  check("the partial eraser cuts a word in two", st.strokes === beforeErase + 1, `${beforeErase} -> ${st.strokes}`);
+  check("the partial eraser cuts a word in two", st.strokes === beforeErase + 1 && !(await lineAt(300)), `${beforeErase} -> ${st.strokes}`);
+
+  console.log("side button on Android (held while the pen hovers)");
+  const beforeAndroid = st.strokes;
+  // across the first word of the first line
+  await pen(along([[160, 128], [160, 188]], 4), { androidSide: true });
+  st = await state();
+  const drewLine = await lineAt(160);
+  check("held before touching the screen, it erases (a word is cut in two)", st.strokes === beforeAndroid + 1 && !drewLine, `${beforeAndroid} -> ${st.strokes}${drewLine ? ", the pen wrote a line" : ""}`);
+  const beforeReleased = st.strokes;
+  // released again: the pen writes
+  await pen(along([[120, 900], [200, 900]], 4));
+  st = await state();
+  check("released, the pen writes again", st.strokes === beforeReleased + 1, `${beforeReleased} -> ${st.strokes}`);
+  // back to where the tests below expect the page
+  await page.evaluate(() => {
+    window.surface.undo();
+    window.surface.undo();
+  });
+  st = await state();
+  check("(undone)", st.strokes === beforeAndroid, `${beforeAndroid} -> ${st.strokes}`);
   await page.screenshot({ path: path.join(SHOTS, "02-erased.png") });
 
   console.log("palm rejection, undo with two fingers");
