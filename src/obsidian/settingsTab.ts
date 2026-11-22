@@ -1,5 +1,7 @@
-import { App, Notice, PluginSettingTab, requireApiVersion, type SettingDefinitionItem } from "obsidian";
+import { App, Notice, PluginSettingTab, requireApiVersion, type Setting, type SettingDefinitionItem } from "obsidian";
 import type InkNotebookPlugin from "../main";
+import { PENS, WRITING_PEN_TYPES } from "../core/ink/pens";
+import { DEFAULT_PEN_PALETTE } from "../core/palette";
 import { paperLabel } from "../core/paper";
 import { cleanSubfolder } from "../core/folders";
 import { PaperPickerModal } from "./paperPicker";
@@ -152,6 +154,32 @@ export class InkSettingTab extends PluginSettingTab {
           toggle("Pressure sensitivity", "Lines get wider the harder you press (fountain pen, brush, pencil).", "pressure", true),
           toggle("Scribble to erase", "Scratch quickly back and forth over writing with the pen to erase it.", "scribbleErase", true),
           toggle("Snap shapes when holding the pen", "Draw a line, rectangle, triangle or circle and keep the pen still at the end: it becomes a clean shape.", "holdToShape", true),
+          {
+            name: "Favourite pens",
+            desc: "How many favourite pen buttons the toolbar has (2 to 8). About four are in sight; swipe or scroll sideways over them to see the others. Save a pen to one in the pen's options.",
+            control: { type: "slider", key: "favoritePens", min: 2, max: 8, step: 1, after: apply },
+          },
+          toggle("Floating pen bar", "Tapping the pen or highlighter opens a bar with the pens, thicknesses and colours (swipe sideways over the colours for more). Drag it by its handle to move it; tap the pen again to hide it.", "penBar", true),
+          {
+            name: "Thicknesses in the pen bar",
+            desc: "How many thickness buttons the pen bar shows (1 to 5, from thin to thick). All five are always in the pen's options (the … on the bar).",
+            control: { type: "slider", key: "penBarSizes", min: 1, max: 5, step: 1, after: apply },
+          },
+          {
+            name: "Pen bar colours",
+            desc: "Add a colour with the + at the end of the pen bar's colours; press and hold a colour (or right-click it) to remove it.",
+            aliases: ["colour picker", "color picker", "palette", "custom colors"],
+            render: (setting: Setting) => {
+              setting.addButton((b) =>
+                b.setButtonText("Reset to the original colours").onClick(async () => {
+                  s.penColors = [...DEFAULT_PEN_PALETTE];
+                  await this.plugin.saveSettings();
+                  apply();
+                  new Notice("The pen bar has its original colours again.");
+                }),
+              );
+            },
+          },
           toggle("Swipe to turn pages", "Swipe left/right (or up/down) with one finger.", "swipePages", true),
           toggle("Two-finger tap undoes", "", "twoFingerUndo", true),
           toggle("Three-finger tap redoes", "", "threeFingerRedo", true),
@@ -159,6 +187,7 @@ export class InkSettingTab extends PluginSettingTab {
             name: "Page on screen",
             control: { type: "dropdown", key: "fit", options: { page: "Whole page", width: "Page width (scroll down)" }, after: apply },
           },
+          toggle("Continuous scroll", "Show the pages one below the other and scroll through them, like a PDF reader, instead of turning them one at a time. Swiping sideways still turns pages.", "continuousScroll", true),
           {
             name: "Toolbar",
             control: { type: "dropdown", key: "toolbarPosition", options: { top: "Top", bottom: "Bottom", left: "Left", right: "Right" }, after: apply },
@@ -169,6 +198,30 @@ export class InkSettingTab extends PluginSettingTab {
             control: { type: "dropdown", key: "lowLatency", options: { auto: "Automatic", on: "Always on", off: "Off" }, after: apply },
           },
         ],
+      },
+      {
+        type: "group",
+        heading: "Pens",
+        items: WRITING_PEN_TYPES.map((pen) => ({
+          name: PENS[pen].label,
+          desc: pen === WRITING_PEN_TYPES[0] ? "Turn off the pens you do not use: they are left out of the pen bar and the pen's options. One pen always stays." : undefined,
+          aliases: ["hide pen", "disable pen", "pen types"],
+          render: (setting: Setting) => {
+            setting.addToggle((t) =>
+              t.setValue(!s.hiddenPens.includes(pen)).onChange(async (on) => {
+                const hidden = on ? s.hiddenPens.filter((p) => p !== pen) : [...s.hiddenPens, pen];
+                if (hidden.length >= WRITING_PEN_TYPES.length) {
+                  new Notice("At least one pen has to stay.");
+                  t.setValue(true);
+                  return;
+                }
+                s.hiddenPens = WRITING_PEN_TYPES.filter((p) => hidden.includes(p));
+                await this.plugin.saveSettings();
+                apply();
+              }),
+            );
+          },
+        })),
       },
       {
         type: "group",

@@ -34,3 +34,31 @@ describe("recognition settings", () => {
     expect(loadSettings(JSON.parse(JSON.stringify(turnedOff))).askForPageName).toBe(false);
   });
 });
+
+describe("favourite pens", () => {
+  it("has two by default and keeps the count between 2 and 8", () => {
+    expect(loadSettings({}).favoritePens).toBe(2);
+    expect(loadSettings({ favoritePens: 5 }).favoritePens).toBe(5);
+    expect(loadSettings({ favoritePens: 1 }).favoritePens).toBe(2);
+    expect(loadSettings({ favoritePens: 7 }).favoritePens).toBe(7);
+    expect(loadSettings({ favoritePens: 12 }).favoritePens).toBe(8);
+    expect(loadSettings({ favoritePens: 3.6 }).favoritePens).toBe(4);
+    expect(loadSettings({ favoritePens: "4" }).favoritePens).toBe(2);
+  });
+
+  it("always has eight slots, keeping the two saved by earlier versions", () => {
+    const saved = [
+      { pen: "pencil", color: "#6a1b9a", width: 2 },
+      { pen: "brush", color: "#2e7d32", width: 5 },
+    ];
+    const favs = loadSettings({ tools: { favorites: saved } }).tools.favorites;
+    expect(favs).toHaveLength(8);
+    expect(favs.slice(0, 2)).toEqual(saved);
+    expect(favs[2]).toEqual({ pen: "ballpoint", color: "#1565c0", width: 1.5 });
+  });
+
+  it("keeps all eight once they are saved", () => {
+    const eight = loadSettings({}).tools.favorites.map((f, i) => ({ ...f, width: 1 + i }));
+    expect(loadSettings(JSON.parse(JSON.stringify({ tools: { favorites: eight } }))).tools.favorites).toEqual(eight);
+  });
+});

@@ -4,7 +4,7 @@ import type InkNotebookPlugin from "../main";
 import { normalizeRotation, parsePageRange, type PdfRotation } from "../core/pdfMath";
 import { cleanSubfolder, homeFolder, joinPath } from "../core/folders";
 import { emptyPage, insertPage, type InkDoc, type Page, type TextBox } from "../core/ink/model";
-import { dashPattern, isMarker, strokeRuns } from "../core/ink/pens";
+import { isMarker, linePattern, strokeRuns } from "../core/ink/pens";
 import { fillGeometry } from "../core/ink/fill";
 import { paperDrawing } from "../core/paper";
 import { renderPageCanvas, TEXT_LINE_HEIGHT, wrapText, measuringContext, drawText } from "../ink/render";
@@ -204,7 +204,7 @@ function drawStrokes(out: PDFPage, page: Page, p: Placement): number {
         borderColor: color(run.color),
         borderWidth: run.w,
         borderLineCap: LineCapStyle.Round,
-        borderDashArray: s.dash && !run.head ? dashPattern(s.width) : undefined,
+        borderDashArray: !run.head && (s.dash || s.dot) ? linePattern(s) : undefined,
         blendMode: marker ? BlendMode.Multiply : undefined,
       });
       n++;

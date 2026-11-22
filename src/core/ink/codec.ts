@@ -75,6 +75,8 @@ const FLAG_AREA = 16;
 const FLAG_ARROW_START = 32;
 const FLAG_ELBOW = 64;
 const FLAG_CURVE = 128;
+/** Dotted (earlier versions do not know it and draw the line solid). */
+const FLAG_DOT = 256;
 
 const FILL_STYLE_CODES = { solid: "o", hatch: "h", cross: "x" } as const;
 
@@ -210,7 +212,8 @@ function strokeLine(s: Stroke): string {
       (s.area ? FLAG_AREA : 0) |
       (s.arrowStart ? FLAG_ARROW_START : 0) |
       (s.elbow ? FLAG_ELBOW : 0) |
-      (s.curve ? FLAG_CURVE : 0);
+      (s.curve ? FLAG_CURVE : 0) |
+      (s.dot ? FLAG_DOT : 0);
     line = `S ${s.id} ${PEN_CODES[s.pen] ?? "b"} ${s.color.replace(/^#/, "")} ${num(s.width)} ${flags} ${encodePoints(s.pts)}`;
     if (s.fill) line += ` f:${s.fill.replace(/^#/, "")}`;
     if (s.fill && s.fillStyle && s.fillStyle !== "solid") line += ` s:${FILL_STYLE_CODES[s.fillStyle]}`;
@@ -370,6 +373,7 @@ export function parseInkFile(text: string): ParsedInkFile {
             arrow: !!(flags & FLAG_ARROW),
             arrowStart: !!(flags & FLAG_ARROW_START),
             dash: !!(flags & FLAG_DASH),
+            dot: !!(flags & FLAG_DOT),
             // an area is only its fill
             area: !!(flags & FLAG_AREA) && !!fill,
             elbow: !!(flags & FLAG_ELBOW),

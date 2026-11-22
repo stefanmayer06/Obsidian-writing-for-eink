@@ -212,7 +212,8 @@ export function excalidrawToItems(elements: ReadonlyArray<ExEl>): Items & { skip
     const exId = str(el.id) ?? newId();
     const id = newId();
     const angle = num(el.angle);
-    const dash = el.strokeStyle === "dashed" || el.strokeStyle === "dotted";
+    const dash = el.strokeStyle === "dashed";
+    const dot = el.strokeStyle === "dotted";
     const width = widthOf(el);
     const push = (s: Stroke) => {
       strokes.push(s);
@@ -232,6 +233,7 @@ export function excalidrawToItems(elements: ReadonlyArray<ExEl>): Items & { skip
           poly: true,
           closed: true,
           dash,
+          dot,
           area: !line,
           fill: fill ?? undefined,
           fillStyle: fill ? fillStyle : undefined,
@@ -289,6 +291,7 @@ export function excalidrawToItems(elements: ReadonlyArray<ExEl>): Items & { skip
             pts: toPts(pts),
             poly: true,
             dash,
+            dot,
             // an arrow without the property has the default head at its end
             arrow: type === "arrow" ? el.endArrowhead !== null : !!el.endArrowhead,
             arrowStart: !!el.startArrowhead,
@@ -486,7 +489,7 @@ export function itemsToExcalidraw(items: Pick<Items, "strokes" | "texts">, opts:
       backgroundColor: s.fill ?? "transparent",
       fillStyle: EX_FILL[s.fillStyle ?? "solid"],
       strokeWidth,
-      strokeStyle: s.dash ? "dashed" : "solid",
+      strokeStyle: s.dot ? "dotted" : s.dash ? "dashed" : "solid",
       opacity: s.pen === "marker" ? 50 : 100,
     };
     const box = boxKind(s);

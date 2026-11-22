@@ -1,5 +1,7 @@
 import { containsPoint, type Pt } from "../core/geometry";
 import { linkBounds } from "../core/ink/geom";
+import { inkPageForPdfPage, pdfLinkAt, type PdfLink } from "../core/pdfLinks";
+import { flingStep, flingVelocity, type MoveSample } from "../core/fling";
 import { handLinkBadge } from "./render";
 import type { InkSurface } from "./surface";
 import { createSession, type InputPt, type ToolSession } from "./tools";
@@ -12,6 +14,8 @@ import type { ToolId } from "./types";
  *    so it counts when it is held as the pen touches the screen
  *  - fingers turn pages (swipe), pan and zoom (pinch); two-finger tap undoes,
  *    three-finger tap redoes; a finger never writes unless finger drawing is on
+ *  - a finger tap (or a Ctrl/Cmd+click) on a link inside a PDF page follows it;
+ *    the pen and a plain click write over PDF links as anywhere else
  *  - touches while the pen is near the screen are ignored (palm rejection)
  *  - a mouse writes like the pen; the wheel turns pages, Ctrl+wheel zooms
  */
@@ -42,6 +46,12 @@ interface Gesture {
   baseTy: number;
   /** A finger that was drawing (finger drawing on) when a second one came down. */
   ended: boolean;
+  /** Continuous scroll: the pan moved the view itself as it went (tx/ty are already applied). */
+  live: boolean;
+  /** Recent pan positions, for the speed at which the finger let go. */
+  samples: MoveSample[];
+  /** It began by stopping a fling: a quick touch then is not a tap. */
+  caught: boolean;
 }
 
 const PALM_MS = 700;
@@ -63,7 +73,8 @@ export class InputRouter {
   private lastTap: { t: number; x: number; y: number } | null = null;
   private wheelAcc = 0;
   private lastWheelTurn = 0;
-  private link: { target: string; x: number; y: number; pointer: number } | null = null;
+  /** A press on a link: it is followed if the pointer comes up without moving. */
+  private link: { open: (newTab: boolean) => void; x: number; y: number; pointer: number } | null = null;
   private mousePan: { x: number; y: number; ox: number; oy: number; pointer: number } | null = null;
   private listeners: Array<[EventTarget, string, EventListener, AddEventListenerOptions | undefined]> = [];
   /** When the pen (or mouse/finger) last wrote, erased or selected (performance.now()). */
@@ -106,8 +117,14 @@ export class InputRouter {
     return !!this.session || !!this.gesture;
   }
 
+  /** A fling is still moving the page. */
+  get flinging(): boolean {
+    return this.fling !== null;
+  }
+
   /** Stop whatever is running (page turn, undo, …). */
   cancel(): void {
+    this.stopFling();
     if (this.session) {
       const sess = this.session;
       this.session = null;
@@ -189,6 +206,28 @@ export class InputRouter {
     return null;
   }
 
+  /** A link inside the PDF page shown as the background, under the point. */
+  private pdfLinkAt(p: Pt): PdfLink | null {
+    const page = this.s.page;
+    if (page.bg.kind !== "pdf") return null;
+    const links = this.s.images.pdfLinks?.(page.bg.path, page.bg.page);
+    return links ? pdfLinkAt(links, page.w, page.h, p, 4 / this.s.view.scale) : null;
+  }
+
+  /** Open a web address, or turn to the ink page showing the PDF page the link points to. */
+  private followPdfLink(l: PdfLink): void {
+    if (l.url) {
+      if (this.s.host.openUrl) this.s.host.openUrl(l.url);
+      else window.open(l.url, "_blank");
+      return;
+    }
+    const bg = this.s.page.bg;
+    if (l.page === undefined || bg.kind !== "pdf") return;
+    const index = inkPageForPdfPage(this.s.document.pages, bg.path, l.page);
+    if (index >= 0) this.s.goTo(index);
+    else this.s.host.notice?.(`Page ${l.page} of this PDF is not in the notebook`);
+  }
+
   private startSession(e: PointerEvent, tool: ToolId, rect = this.s.el.getBoundingClientRect()): void {
     this.rect = rect;
     this.lastActivity = performance.now();
@@ -206,6 +245,9 @@ export class InputRouter {
   private onDown(e: PointerEvent): void {
     if (this.isUi(e.target)) return;
     e.stopPropagation();
+    // touching the page catches a fling where it is (and that touch is not a tap on what passes by)
+    this.caughtFling = this.flinging;
+    this.stopFling();
     const now = performance.now();
     if (e.pointerType === "touch") {
       // palm rejection: the pen is writing or hovering
@@ -214,6 +256,7 @@ export class InputRouter {
         e.preventDefault();
         this.focus();
         this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY });
+        this.s.activatePageAt(e.clientY);
         this.startTouchDraw(e);
         return;
       }
@@ -243,12 +286,22 @@ export class InputRouter {
     }
     const tool = this.toolFor(e);
     if (tool === "none") return;
+    // continuous scroll: write on the page that was touched, also when it is the one above or below
+    this.s.activatePageAt(e.clientY);
     if (e.pointerType === "pen") this.s.host.penDown?.(e.clientX, e.clientY, e.timeStamp);
     const rect = this.s.el.getBoundingClientRect();
+    const p = this.s.toPage(e.clientX, e.clientY, rect);
     if (tool !== "lasso" && tool !== "eraser") {
-      const target = this.linkAt(this.s.toPage(e.clientX, e.clientY, rect));
+      const target = this.linkAt(p);
       if (target) {
-        this.link = { target, x: e.clientX, y: e.clientY, pointer: e.pointerId };
+        this.link = { open: (newTab) => this.s.host.openLink(target, newTab), x: e.clientX, y: e.clientY, pointer: e.pointerId };
+        return;
+      }
+    }
+    if (e.pointerType === "mouse" && (e.ctrlKey || e.metaKey)) {
+      const pdfLink = this.pdfLinkAt(p);
+      if (pdfLink) {
+        this.link = { open: () => this.followPdfLink(pdfLink), x: e.clientX, y: e.clientY, pointer: e.pointerId };
         return;
       }
     }
@@ -305,7 +358,7 @@ export class InputRouter {
       this.link = null;
       // the pen tapped a link: whatever the Boox firmware drew there is not ink
       if (e.pointerType === "pen") this.s.host.inkDiscarded?.();
-      if (Math.hypot(e.clientX - l.x, e.clientY - l.y) < TAP_PX) this.s.host.openLink(l.target, e.ctrlKey || e.metaKey);
+      if (Math.hypot(e.clientX - l.x, e.clientY - l.y) < TAP_PX) l.open(e.ctrlKey || e.metaKey);
       return;
     }
     if (this.session && e.pointerId === this.sessionPointer) {
@@ -342,7 +395,7 @@ export class InputRouter {
   private canPan(): { x: boolean; y: boolean } {
     const p = this.s.page;
     const v = this.s.view;
-    return { x: p.w * v.scale > this.s.width + 1, y: p.h * v.scale > this.s.height + 1 };
+    return { x: p.w * v.scale > this.s.width + 1, y: this.s.scrolling || p.h * v.scale > this.s.height + 1 };
   }
 
   private touchDown(e: PointerEvent): void {
@@ -350,11 +403,17 @@ export class InputRouter {
     const now = performance.now();
     this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY });
     if (!this.gesture) {
-      this.gesture = { start: now, max: 1, moved: false, mode: "none", d0: 0, c0: { x: 0, y: 0 }, k: 1, tx: 0, ty: 0, baseTx: 0, baseTy: 0, ended: false };
+      this.gesture = { start: now, max: 1, moved: false, mode: "none", d0: 0, c0: { x: 0, y: 0 }, k: 1, tx: 0, ty: 0, baseTx: 0, baseTy: 0, ended: false, live: false, samples: [], caught: this.caughtFling };
     }
     const g = this.gesture;
     g.max = Math.max(g.max, this.touches.size);
     if (this.touches.size === 2) {
+      // a live scroll is already in the view: the pinch starts from there
+      if (g.live) {
+        g.tx = 0;
+        g.ty = 0;
+        g.live = false;
+      }
       const [a, b] = [...this.touches.values()];
       g.mode = "pinch";
       g.d0 = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
@@ -400,9 +459,22 @@ export class InputRouter {
     }
     if (g.mode === "pan") {
       const pan = this.canPan();
+      const tx = pan.x ? dx : 0;
+      const ty = pan.y ? dy : 0;
       g.k = 1;
-      g.tx = pan.x ? dx : 0;
-      g.ty = pan.y ? dy : 0;
+      const now = performance.now();
+      g.samples.push({ t: now, x: tx, y: ty });
+      if (g.samples.length > 12) g.samples.shift();
+      if (this.s.scrolling) {
+        // continuous scroll: move the view itself, so the next pages come into sight as you scroll
+        this.s.scrollBy(tx - g.tx, ty - g.ty);
+        g.tx = tx;
+        g.ty = ty;
+        g.live = true;
+        return;
+      }
+      g.tx = tx;
+      g.ty = ty;
       this.applyStageTransform(g);
     }
   }
@@ -429,6 +501,7 @@ export class InputRouter {
     const now = performance.now();
     const quick = now - g.start < TAP_MS;
     if (!g.moved && quick) {
+      if (g.caught && g.max === 1) return;
       if (g.max === 2 && this.s.settings.twoFingerUndo) this.s.undo();
       else if (g.max === 3 && this.s.settings.threeFingerRedo) this.s.redo();
       else if (g.max === 1 && t) this.tap(t);
@@ -447,23 +520,73 @@ export class InputRouter {
       return;
     }
     this.endGesture(true, g);
+    if (g.mode === "pan") {
+      const { vx, vy } = flingVelocity(g.samples, now);
+      if (vx !== 0 || vy !== 0) this.startFling(vx, vy);
+    }
+  }
+
+  // ------------------------------------------------------------------ momentum
+
+  private fling: { vx: number; vy: number; t: number; frame: number } | null = null;
+  /** The last touch stopped a fling. */
+  private caughtFling = false;
+
+  /** Keep scrolling at the speed the finger let go with, slowing down until it stops. */
+  private startFling(vx: number, vy: number): void {
+    this.stopFling();
+    const win = this.s.el.ownerDocument.defaultView ?? window;
+    const tick = (t: number) => {
+      const f = this.fling;
+      if (!f) return;
+      const step = flingStep(f.vx, f.vy, t - f.t);
+      f.vx = step.vx;
+      f.vy = step.vy;
+      f.t = t;
+      const before = this.s.view;
+      const page = this.s.pageIndex;
+      this.s.scrollBy(step.dx, step.dy);
+      const after = this.s.view;
+      // the end of the notebook (or of the page) stops it
+      const stuck = page === this.s.pageIndex && Math.abs(after.ox - before.ox) + Math.abs(after.oy - before.oy) < 0.01 && Math.abs(step.dx) + Math.abs(step.dy) > 0.01;
+      if (step.done || stuck) {
+        this.fling = null;
+        return;
+      }
+      f.frame = win.requestAnimationFrame(tick);
+    };
+    this.fling = { vx, vy, t: performance.now(), frame: win.requestAnimationFrame(tick) };
+  }
+
+  /** A touch, the pen or the wheel stops a fling where it is. */
+  private stopFling(): void {
+    if (!this.fling) return;
+    (this.s.el.ownerDocument.defaultView ?? window).cancelAnimationFrame(this.fling.frame);
+    this.fling = null;
   }
 
   /** Apply (or drop) the CSS transform of a pan/pinch to the real view. */
   private endGesture(apply: boolean, g: Gesture | null = this.gesture): void {
     this.gesture = null;
     this.s.stage.style.removeProperty("transform");
-    if (!g || !apply || (g.k === 1 && g.tx === 0 && g.ty === 0)) return;
+    if (!g || !apply || g.live || (g.k === 1 && g.tx === 0 && g.ty === 0)) return;
     const v = this.s.view;
     this.s.setView({ scale: v.scale * g.k, ox: v.ox * g.k + g.tx, oy: v.oy * g.k + g.ty });
   }
 
   private tap(t: TouchInfo): void {
     const rect = this.s.el.getBoundingClientRect();
+    this.s.activatePageAt(t.y, rect);
     const p = this.s.toPage(t.x, t.y, rect);
     const target = this.linkAt(p);
     if (target) {
       this.s.host.openLink(target, false);
+      return;
+    }
+    const pdfLink = this.pdfLinkAt(p);
+    if (pdfLink) {
+      this.lastTap = null;
+      this.followPdfLink(pdfLink);
       return;
     }
     const now = performance.now();
@@ -483,6 +606,7 @@ export class InputRouter {
   private onWheel(e: WheelEvent): void {
     if (this.isUi(e.target)) return;
     e.preventDefault();
+    this.stopFling();
     const rect = this.s.el.getBoundingClientRect();
     const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? this.s.height : 1;
     const dx = e.deltaX * unit;

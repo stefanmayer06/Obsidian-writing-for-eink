@@ -2,6 +2,7 @@ import { Menu, moment, Notice, normalizePath, Scope, setIcon, TextFileView, TFil
 import type InkNotebookPlugin from "../main";
 import { inkDataOf, InkParseError, parseInkFile, serializeInkFile, typedTextOf } from "../core/ink/codec";
 import type { InkFile, InkMeta, PageBackground } from "../core/ink/model";
+import { shownPens } from "../core/ink/pens";
 import { paperLabel, paperSize } from "../core/paper";
 import { joinPath } from "../core/folders";
 import { splitFrontmatter } from "../core/transcript";
@@ -87,6 +88,7 @@ export class InkView extends TextFileView {
       images: plugin.images,
       icon: (el, name) => setIcon(el, name),
       openLink: (target, newTab) => void this.app.workspace.openLinkText(target, this.file?.path ?? "", newTab),
+      openUrl: (url) => window.open(url, "_blank"),
       changed: () => this.onChanged(),
       pageChanged: (i, n) => {
         this.toolbar?.refreshPage(i, n);
@@ -120,6 +122,7 @@ export class InkView extends TextFileView {
       },
       endButtons: () => this.endButtons(),
       openLibrary: () => this.openLibrary(),
+      pdfOutline: (path) => plugin.images.pdfOutline(path),
     });
     content.prepend(this.toolbar.el);
     this.applySettings();
@@ -162,10 +165,25 @@ export class InkView extends TextFileView {
       scribbleErase: s.scribbleErase,
       holdToShape: s.holdToShape,
       fit: s.fit,
+      continuous: s.continuousScroll,
+      favoriteCount: s.favoritePens,
+      hiddenPens: s.hiddenPens,
+      penBar: s.penBar,
+      penBarPos: s.penBarPos,
+      penColors: s.penColors,
+      penBarSizes: s.penBarSizes,
       lowLatency: lowLatencyActive(s),
       eink,
     };
     this.surface.setSettings(patch);
+    // a pen that was just hidden is not the pen in use any more
+    const pens = shownPens(s.hiddenPens);
+    if (!pens.includes(this.surface.tools.pen)) {
+      this.surface.setTools({ pen: pens[0] });
+      this.rememberTools(this.surface.tools);
+    }
+    // the number of favourite pens on the toolbar, the pens in the pen bar
+    this.toolbar?.refreshTools();
     const dark = document.body.hasClass("theme-dark");
     this.surface.setBackdrop(eink ? (dark ? "#000000" : "#ffffff") : dark ? "#262626" : "#e6e6e6");
     this.setToolbarPosition(s.toolbarPosition);
@@ -603,7 +621,34 @@ export class InkView extends TextFileView {
         ],
       },
       { title: "Export", items: exportItems },
-      { title: "View", items: [fit("page", "Show the whole page"), fit("width", "Fit the page width"), pos("top", "Toolbar at the top"), pos("bottom", "Toolbar at the bottom"), pos("left", "Toolbar on the left"), pos("right", "Toolbar on the right")] },
+      {
+        title: "View",
+        items: [
+          fit("page", "Show the whole page"),
+          fit("width", "Fit the page width"),
+          {
+            icon: "scroll",
+            label: "Continuous scroll",
+            hint: "Pages one below the other",
+            checked: settings.continuousScroll,
+            run: () => {
+              settings.continuousScroll = !settings.continuousScroll;
+              this.plugin.saveSettingsSoon();
+              this.plugin.applyInkSettings();
+            },
+          },
+          {
+            icon: "palette",
+            label: "Floating pen bar",
+            hint: "Tap the pen for pens, sizes and colours",
+            checked: settings.penBar,
+            run: () => {
+              settings.penBar = !settings.penBar;
+              this.plugin.saveSettingsSoon();
+              this.plugin.applyInkSettings();
+            },
+          },
+          pos("top", "Toolbar at the top"), pos("bottom", "Toolbar at the bottom"), pos("left", "Toolbar on the left"), pos("right", "Toolbar on the right")] },
       {
         items: [
           { icon: "settings", label: "Ink Notebook settings", run: () => this.plugin.openSettings() },

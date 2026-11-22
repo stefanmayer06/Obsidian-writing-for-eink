@@ -1,9 +1,12 @@
-import { INK_COLORS, MARKER_COLORS, PENS } from "../../core/ink/pens";
+import { INK_COLORS, MARKER_COLORS, PENS, shownPens } from "../../core/ink/pens";
 import { SHAPES, type ShapeKind } from "../../core/ink/shapes";
 import { FILL_COLORS, FILL_STYLE_INFO } from "../../core/ink/fill";
 import { FILL_STYLES } from "../../core/ink/model";
+import { inkPageForPdfPage } from "../../core/pdfLinks";
+import { currentOutlineEntry, type PdfOutlineEntry } from "../../core/pdfOutline";
 import type { InkSurface } from "../surface";
-import type { EraserMode, SurfaceSettings, ToolId, ToolState, WritingPen } from "../types";
+import { MAX_FAVORITES, MIN_FAVORITES, type EraserMode, type SurfaceSettings, type ToolId, type ToolState } from "../types";
+import { lineStyleButtons, PenBar } from "./penBar";
 import { button, el, menu, Popover, section, swatches, thickness, tiles, toggle, type IconFn, type MenuSection } from "./popover";
 
 /**
@@ -29,9 +32,10 @@ export interface ToolbarHost {
   endButtons(): Array<{ id: string; icon: string; label: string; showLabel?: boolean; run(): void }>;
   /** Open the object libraries (the Library button is shown when this is given). */
   openLibrary?: () => void;
+  /** A PDF's outline (the Outlines button is shown on PDF pages when this is given). */
+  pdfOutline?: (path: string) => Promise<PdfOutlineEntry[]>;
 }
 
-const WRITING_PENS: WritingPen[] = ["fountain", "ballpoint", "pencil", "brush", "calligraphy"];
 
 const ERASERS: Array<{ value: EraserMode; icon: string; label: string }> = [
   { value: "partial", icon: "eraser", label: "Partial" },
@@ -64,6 +68,12 @@ export class Toolbar {
   private pageLabel!: HTMLButtonElement;
   private endEl!: HTMLElement;
   private libraryBtn: HTMLButtonElement | null = null;
+  private outlineBtn: HTMLButtonElement | null = null;
+  private favsEl: HTMLElement | null = null;
+  /** The floating pen bar (when the "Floating pen bar" setting is on). */
+  private penBar: PenBar | null = null;
+  /** The favourite pen that was in use, to scroll it into sight when it changes. */
+  private activeFav = -1;
   private moreBtn: HTMLButtonElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
   /** How much was folded into the "More" menu to make the bar fit (0 = nothing). */
@@ -88,7 +98,64 @@ export class Toolbar {
   destroy(): void {
     this.resizeObserver?.disconnect();
     Popover.closeAll();
+    this.penBar?.destroy();
     this.el.remove();
+  }
+
+  /** The pen bar, made the first time it is needed (next to the toolbar, in the view). */
+  private getPenBar(): PenBar {
+    if (!this.penBar) {
+      const parent = this.el.parentElement ?? this.el;
+      this.penBar = new PenBar(parent, this.surface, {
+        icon: this.icon,
+        setTools: (patch) => this.setTools(patch),
+        more: (anchor) => {
+          if (anchor.classList.contains("is-open")) {
+            Popover.closeAll();
+            return;
+          }
+          const tool = this.surface.tools.tool === "marker" ? "marker" : "pen";
+          this.openOptions(tool, anchor);
+        },
+        moved: (pos) => {
+          this.surface.setSettings({ penBarPos: pos });
+          this.host.settingsChanged({ penBarPos: pos });
+        },
+        setHiddenPens: (hidden) => {
+          const hiddenPens = hidden.length >= shownPens([]).length ? [] : hidden;
+          this.surface.setSettings({ hiddenPens });
+          this.host.settingsChanged({ hiddenPens });
+          // the pen in use was just hidden: write with the first one still shown
+          const pens = shownPens(hiddenPens);
+          if (!pens.includes(this.surface.tools.pen)) this.setTools({ pen: pens[0] });
+          else this.penBar?.refresh();
+        },
+        setColors: (penColors) => {
+          this.surface.setSettings({ penColors });
+          this.host.settingsChanged({ penColors });
+          this.penBar?.refresh();
+        },
+        defaultTop: () => {
+          // just under a top toolbar; near the top of the page otherwise
+          const host = parent.getBoundingClientRect();
+          const bar = this.el.getBoundingClientRect();
+          return this.position === "top" ? bar.bottom - host.top + 8 : 8;
+        },
+      });
+    }
+    return this.penBar;
+  }
+
+  /** The pen bar goes with the pen and the highlighter, and with its setting. */
+  private refreshPenBar(): void {
+    const bar = this.penBar;
+    if (!bar) return;
+    const t = this.surface.tools.tool;
+    if (!this.surface.settings.penBar || (t !== "pen" && t !== "marker")) bar.hide();
+    else {
+      bar.refresh();
+      bar.place();
+    }
   }
 
   /**
@@ -112,6 +179,12 @@ export class Toolbar {
     return this.host.icon;
   }
 
+  /** How many favourite pens are shown (the setting, kept in range). */
+  private get favoriteCount(): number {
+    const n = Math.round(this.surface.settings.favoriteCount);
+    return Number.isFinite(n) ? Math.max(MIN_FAVORITES, Math.min(MAX_FAVORITES, n)) : MIN_FAVORITES;
+  }
+
   private build(): void {
     const tools = el(this.el, "div", "ink-tb-group ink-tb-tools");
     const tool = (id: ToolId, icon: string, label: string) => {
@@ -120,6 +193,11 @@ export class Toolbar {
       this.toolButtons.set(id, b);
       return b;
     };
+    if (this.host.pdfOutline) {
+      const b = button(tools, this.icon, { icon: "list-tree", label: "Outlines", cls: "ink-tb-btn ink-tb-outline", onClick: () => this.openOutline(b) });
+      b.hidden = true;
+      this.outlineBtn = b;
+    }
     tool("pen", "pen-tool", "Pen");
     tool("marker", "highlighter", "Highlighter");
     tool("eraser", "eraser", "Eraser");
@@ -134,8 +212,23 @@ export class Toolbar {
     const ins = button(tools, this.icon, { icon: "image-plus", label: "Insert", cls: "ink-tb-btn ink-tb-insert", onClick: () => this.openMenu(ins, this.host.insertMenu()) });
 
     const favs = el(this.el, "div", "ink-tb-group ink-tb-favs");
-    for (let i = 0; i < 2; i++) {
+    this.favsEl = favs;
+    // a mouse wheel scrolls the strip of favourite pens sideways (on a top or bottom toolbar)
+    favs.addEventListener(
+      "wheel",
+      (e) => {
+        if (this.el.hasAttribute("data-vertical") || favs.scrollWidth <= favs.clientWidth + 1) return;
+        const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+        if (d === 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        favs.scrollLeft += e.deltaMode === 1 ? d * 16 : d;
+      },
+      { passive: false },
+    );
+    for (let i = 0; i < MAX_FAVORITES; i++) {
       const b = button(favs, this.icon, { label: `Favourite pen ${i + 1}`, cls: "ink-tb-btn ink-tb-fav", onClick: () => this.useFavorite(i) });
+      b.hidden = i >= this.favoriteCount;
       el(b, "span", "ink-fav-stroke");
       this.favButtons.push(b);
     }
@@ -174,12 +267,17 @@ export class Toolbar {
       const t = this.surface.tools;
       folded.push({
         title: "Favourite pens",
-        items: t.favorites.map((f, i) => ({ icon: "star", label: `${PENS[f.pen].label} · ${INK_COLORS.find((c) => c.color === f.color)?.label ?? f.color}`, run: () => this.useFavorite(i) })),
+        items: t.favorites.slice(0, this.favoriteCount).map((f, i) => ({ icon: "star", label: `${PENS[f.pen].label} · ${INK_COLORS.find((c) => c.color === f.color)?.label ?? f.color}`, run: () => this.useFavorite(i) })),
       });
     }
     if (this.level >= 1) {
       const notes = this.host.endButtons().find((b) => b.id === "notes");
       if (notes) folded.push({ items: [{ icon: notes.icon, label: notes.label, run: () => notes.run() }] });
+    }
+    const outline = this.outlineBtn;
+    if (this.level >= 3 && outline && !outline.hidden && this.moreBtn) {
+      const more = this.moreBtn;
+      folded.push({ items: [{ icon: "list-tree", label: "Outlines…", run: () => this.openOutline(more) }] });
     }
     const openLibrary = this.host.openLibrary;
     if (this.level >= 3 && openLibrary) folded.push({ items: [{ icon: "library", label: "Object library…", run: () => openLibrary() }] });
@@ -253,15 +351,65 @@ export class Toolbar {
         i.dataset.icon = icon;
       }
     }
+    // the number of favourite pens (a setting) may have changed
+    const count = this.favoriteCount;
+    let shownChanged = false;
+    this.favButtons.forEach((b, i) => {
+      const hidden = i >= count;
+      if (b.hidden !== hidden) {
+        b.hidden = hidden;
+        shownChanged = true;
+      }
+    });
+    if (shownChanged) this.fit();
+    let activeFav = -1;
     t.favorites.forEach((f, i) => {
       const b = this.favButtons[i];
-      if (!b) return;
+      if (!b || i >= count) return;
       b.style.setProperty("--ink-pen-color", f.color);
       b.style.setProperty("--ink-fav-width", `${Math.max(2, Math.min(8, f.width * 1.6))}px`);
       const active = t.tool === "pen" && t.pen === f.pen && t.color.toLowerCase() === f.color.toLowerCase() && Math.abs(t.widths[t.pen] - f.width) < 1e-6;
       b.classList.toggle("is-active", active);
+      if (active && activeFav < 0) activeFav = i;
       b.title = `${PENS[f.pen].label}, ${INK_COLORS.find((c) => c.color === f.color)?.label ?? f.color} (long-press the pen options to change)`;
     });
+    // a favourite that became the pen in use (e.g. saved to slot 7) scrolls into sight
+    if (activeFav !== this.activeFav) {
+      this.activeFav = activeFav;
+      if (activeFav >= 0) this.revealFavorite(activeFav);
+    }
+    this.refreshPenBar();
+  }
+
+  /** Scroll the strip of favourite pens just enough to show one of them. */
+  private revealFavorite(i: number): void {
+    const strip = this.favsEl;
+    const b = this.favButtons[i];
+    if (!strip || !b) return;
+    const vertical = this.el.hasAttribute("data-vertical");
+    const offset = (x: HTMLElement) => (vertical ? x.offsetTop - strip.offsetTop : x.offsetLeft - strip.offsetLeft);
+    const start = offset(b);
+    const size = vertical ? b.offsetHeight : b.offsetWidth;
+    const view = vertical ? strip.clientHeight : strip.clientWidth;
+    const pos = vertical ? strip.scrollTop : strip.scrollLeft;
+    let next = pos;
+    if (start < pos) next = start;
+    else if (start + size > pos + view) {
+      // the strip snaps to the buttons' starts: go to the first one that brings this button fully in
+      const need = start + size - view;
+      next = start;
+      for (const other of this.favButtons) {
+        if (other.hidden) continue;
+        const o = offset(other);
+        if (o >= need - 0.5) {
+          next = o;
+          break;
+        }
+      }
+    }
+    if (next === pos) return;
+    if (vertical) strip.scrollTop = next;
+    else strip.scrollLeft = next;
   }
 
   /**
@@ -275,6 +423,82 @@ export class Toolbar {
     if (this.pageLabel.title !== "All pages") this.pageLabel.title = "All pages";
     setDisabled(this.prevBtn, index <= 0);
     setDisabled(this.nextBtn, index >= count - 1);
+    this.refreshOutline();
+  }
+
+  /** The Outlines button is there on PDF pages only. */
+  refreshOutline(): void {
+    const b = this.outlineBtn;
+    if (!b) return;
+    const hidden = this.surface.page.bg.kind !== "pdf";
+    if (b.hidden !== hidden) {
+      b.hidden = hidden;
+      if (hidden && b.classList.contains("is-open")) Popover.closeAll();
+      this.fit();
+    }
+  }
+
+  /** The card with the PDF's outline; tapping an entry turns to its page. */
+  private openOutline(anchor: HTMLButtonElement): void {
+    if (anchor.classList.contains("is-open")) {
+      Popover.closeAll();
+      return;
+    }
+    const bg = this.surface.page.bg;
+    const load = this.host.pdfOutline;
+    if (bg.kind !== "pdf" || !load) return;
+    const pop = new Popover(this.el.parentElement ?? this.el, anchor, "ink-pop-outline");
+    const sec = section(pop.el, "Outlines");
+    const status = el(sec, "p", "ink-pop-hint", "Loading…");
+    pop.place(this.side());
+    load(bg.path).then(
+      (entries) => {
+        if (Popover.current !== pop) return;
+        status.remove();
+        if (entries.length === 0) {
+          el(sec, "p", "ink-pop-hint", "This PDF has no outline.");
+          pop.place(this.side());
+          return;
+        }
+        this.fillOutline(el(sec, "div", "ink-menu ink-outline"), entries, bg.path, bg.page, () => pop.close());
+        pop.place(this.side());
+        pop.el.querySelector<HTMLElement>(".ink-outline .is-checked")?.scrollIntoView({ block: "center" });
+      },
+      (e) => {
+        console.warn("Ink Notebook: could not read the outline of the PDF", e);
+        if (Popover.current === pop) status.textContent = "Could not read the outline of this PDF.";
+      },
+    );
+  }
+
+  private fillOutline(list: HTMLElement, entries: PdfOutlineEntry[], path: string, pdfPage: number, close: () => void): void {
+    const pages = this.surface.document.pages;
+    const current = currentOutlineEntry(entries, pdfPage);
+    entries.forEach((entry, i) => {
+      const index = entry.page !== undefined ? inkPageForPdfPage(pages, path, entry.page) : -1;
+      const b = el(list, "button", `ink-menu-item ink-outline-item${i === current ? " is-checked" : ""}`);
+      b.type = "button";
+      b.style.setProperty("--ink-outline-depth", String(Math.min(entry.depth, 6)));
+      const t = el(b, "span", "ink-menu-text");
+      el(t, "span", "ink-menu-label", entry.title);
+      if (entry.url) el(t, "span", "ink-menu-hint", "Web link");
+      else if (entry.page === undefined) el(t, "span", "ink-menu-hint", "No page");
+      else if (index < 0) el(t, "span", "ink-menu-hint", `Page ${entry.page} – not in this notebook`);
+      el(b, "span", "ink-outline-page", entry.page !== undefined ? String(entry.page) : "");
+      b.disabled = !entry.url && index < 0;
+      b.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (b.disabled) return;
+        close();
+        if (entry.url) {
+          if (this.surface.host.openUrl) this.surface.host.openUrl(entry.url);
+          else window.open(entry.url, "_blank");
+        } else {
+          this.surface.goTo(index);
+        }
+      });
+    });
   }
 
   refreshHistory(canUndo: boolean, canRedo: boolean): void {
@@ -301,6 +525,15 @@ export class Toolbar {
       const same = b.classList.contains("is-open");
       Popover.closeAll();
       if (same) return;
+    }
+    // the floating pen bar: the pen and the highlighter open it, tapping them again hides it
+    if ((id === "pen" || id === "marker") && this.surface.settings.penBar) {
+      const bar = this.getPenBar();
+      if (!wasActive) {
+        this.setTools({ tool: id });
+        bar.show();
+      } else bar.toggle();
+      return;
     }
     if (!wasActive) {
       this.setTools({ tool: id });
@@ -351,27 +584,31 @@ export class Toolbar {
         tiles(
           section(root, "Pen"),
           this.icon,
-          WRITING_PENS.map((p) => ({ value: p, icon: PENS[p].icon, label: PENS[p].label.replace(/ pen$/, "") })),
+          shownPens(this.surface.settings.hiddenPens).map((p) => ({ value: p, icon: PENS[p].icon, label: PENS[p].label.replace(/ pen$/, "") })),
           t.pen,
           (p) => set({ pen: p }),
         );
         thickness(section(root, "Thickness"), this.icon, PENS[t.pen].presets, t.widths[t.pen], t.color, (w) => set({ widths: { ...t.widths, [t.pen]: w } }));
         swatches(section(root, "Colour"), INK_COLORS, t.color, (c) => set({ color: c }));
+        lineStyleButtons(el(section(root, "Line"), "div", "ink-pop-row"), this.icon, t.lineStyle, "ink-pop-wide", (st) => set({ lineStyle: st }), true);
         const opts = section(root);
         toggle(opts, "Pressure sensitivity", this.surface.settings.pressure, (v) => setting({ pressure: v }), "Lines get wider the harder you press");
-        const favRow = el(section(root, "Favourite pens"), "div", "ink-pop-row");
-        for (let i = 0; i < 2; i++) {
-          button(favRow, this.icon, {
+        const count = this.favoriteCount;
+        const favRow = el(section(root, count > 2 ? "Save as favourite pen" : "Favourite pens"), "div", "ink-pop-row");
+        for (let i = 0; i < count; i++) {
+          // two get wide buttons as before; more get numbered ones that fit in a row
+          const b = button(favRow, this.icon, {
             icon: "star",
-            label: `Save as favourite ${i + 1}`,
+            label: count > 2 ? String(i + 1) : `Save as favourite ${i + 1}`,
             showLabel: true,
-            cls: "ink-pop-wide",
+            cls: count > 2 ? "ink-pop-wide ink-fav-slot" : "ink-pop-wide",
             onClick: () => {
               const favorites = t.favorites.slice();
               favorites[i] = { pen: t.pen, color: t.color, width: t.widths[t.pen] };
               set({ favorites });
             },
           });
+          b.title = `Save this pen as favourite ${i + 1}`;
         }
         break;
       }

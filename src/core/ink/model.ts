@@ -38,6 +38,8 @@ export interface Stroke {
   /** An arrow head at the first point too. */
   readonly arrowStart?: boolean;
   readonly dash?: boolean;
+  /** A dotted line (round dots the stroke's width apart); wins over `dash`. */
+  readonly dot?: boolean;
   /**
    * Fill colour (#rrggbb) of the area the stroke encloses. Fills are drawn
    * underneath all ink, like the highlighter, so they never hide writing.
@@ -197,7 +199,7 @@ export function qp(p: number): number {
   return Math.round(Math.min(1, Math.max(0, p)) * 255) / 255;
 }
 
-const OPTIONAL_STROKE_FIELDS = ["poly", "closed", "arrow", "arrowStart", "dash", "fill", "fillStyle", "area", "from", "to", "elbow", "curve"] as const;
+const OPTIONAL_STROKE_FIELDS = ["poly", "closed", "arrow", "arrowStart", "dash", "dot", "fill", "fillStyle", "area", "from", "to", "elbow", "curve"] as const;
 
 export function makeStroke(fields: Omit<Stroke, "id"> & { id?: string }): Stroke {
   const s: Stroke = { ...fields, id: fields.id ?? newId() };

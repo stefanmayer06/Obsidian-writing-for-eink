@@ -1,9 +1,10 @@
 import { DEFAULT_PAPER, isPaperStyle, normalizePaperSpec, type PaperSpec } from "./core/paper";
 import { cleanSubfolder } from "./core/folders";
-import { PENS } from "./core/ink/pens";
+import { LINE_STYLES, PENS, WRITING_PEN_TYPES } from "./core/ink/pens";
+import { DEFAULT_PEN_PALETTE, loadPalette } from "./core/palette";
 import { FILL_STYLES, PEN_TYPES } from "./core/ink/model";
 import { SHAPES, type ShapeKind } from "./core/ink/shapes";
-import { DEFAULT_TOOL_STATE, type FitMode, type PenButtonAction, type ToolState, type WritingPen } from "./ink/types";
+import { DEFAULT_TOOL_STATE, MAX_FAVORITES, MIN_FAVORITES, type FitMode, type PenButtonAction, type ToolState, type WritingPen } from "./ink/types";
 import type { ToolbarPosition } from "./ink/ui/toolbar";
 
 export type AzureApi = "auto" | "v4" | "v3.2";
@@ -77,6 +78,20 @@ export interface InkSettings {
   scribbleErase: boolean;
   holdToShape: boolean;
   fit: FitMode;
+  /** Scroll through the pages one below the other instead of turning them. */
+  continuousScroll: boolean;
+  /** How many favourite pens the toolbar has (2–8; about four are in sight, the rest scroll). */
+  favoritePens: number;
+  /** Pens left out of the pen bar and the pen's options (never all of them). */
+  hiddenPens: WritingPen[];
+  /** Tapping the pen or highlighter opens the floating pen bar. */
+  penBar: boolean;
+  /** Where the pen bar was moved to (fractions of the view), or null for its place under the toolbar. */
+  penBarPos: { x: number; y: number } | null;
+  /** The pen bar's colours (your own: added with the colour picker, removed by holding one). */
+  penColors: string[];
+  /** How many thicknesses the pen bar shows (1–5). */
+  penBarSizes: number;
   toolbarPosition: ToolbarPosition;
   lowLatency: LowLatencyMode;
   /** Instant ink on Boox tablets with the Ink Notebook Bridge app. */
@@ -144,6 +159,13 @@ export const DEFAULT_SETTINGS: InkSettings = {
   scribbleErase: true,
   holdToShape: true,
   fit: "page",
+  continuousScroll: false,
+  favoritePens: 2,
+  hiddenPens: [],
+  penBar: false,
+  penBarPos: null,
+  penColors: [...DEFAULT_PEN_PALETTE],
+  penBarSizes: 5,
   toolbarPosition: "top",
   lowLatency: "auto",
   fastInk: "auto",
@@ -169,6 +191,22 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback
 
 function numberIn(value: unknown, min: number, max: number, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+}
+
+/** The hidden pens: known pens only, each once, and never all of them (then none is hidden). */
+function loadHiddenPens(value: unknown): WritingPen[] {
+  if (!Array.isArray(value)) return [];
+  const hidden = WRITING_PEN_TYPES.filter((p) => value.includes(p));
+  return hidden.length >= WRITING_PEN_TYPES.length ? [] : hidden;
+}
+
+/** A stored pen bar position: both fractions in 0–1, or null. */
+function loadPenBarPos(value: unknown): { x: number; y: number } | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const ok = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+  if (!ok(v.x) || !ok(v.y)) return null;
+  return { x: Math.min(1, Math.max(0, v.x)), y: Math.min(1, Math.max(0, v.y)) };
 }
 
 function bool(value: unknown, fallback: boolean): boolean {
@@ -225,6 +263,13 @@ export function loadSettings(raw: unknown): InkSettings {
     scribbleErase: bool(r.scribbleErase, d.scribbleErase),
     holdToShape: bool(r.holdToShape, d.holdToShape),
     fit: oneOf(r.fit, ["page", "width"] as const, d.fit),
+    continuousScroll: bool(r.continuousScroll, d.continuousScroll),
+    favoritePens: Math.round(numberIn(r.favoritePens, MIN_FAVORITES, MAX_FAVORITES, d.favoritePens)),
+    hiddenPens: loadHiddenPens(r.hiddenPens),
+    penBar: bool(r.penBar, d.penBar),
+    penBarPos: loadPenBarPos(r.penBarPos),
+    penColors: loadPalette(r.penColors),
+    penBarSizes: Math.round(numberIn(r.penBarSizes, 1, 5, d.penBarSizes)),
     toolbarPosition: oneOf(r.toolbarPosition, ["top", "bottom", "left", "right"] as const, d.toolbarPosition),
     // it was a switch, on by default: on becomes automatic (off on e-ink screens)
     lowLatency: r.lowLatency === false ? "off" : oneOf(r.lowLatency, ["auto", "on", "off"] as const, d.lowLatency),
@@ -280,6 +325,7 @@ export function loadTools(raw: unknown): ToolState {
     fillColor: r.fillColor === "" ? "" : color(r.fillColor, d.fillColor),
     fillStyle: oneOf(r.fillStyle, FILL_STYLES, d.fillStyle),
     textSize: numberIn(r.textSize, 8, 120, d.textSize),
+    lineStyle: oneOf(r.lineStyle, LINE_STYLES, d.lineStyle),
     favorites,
   };
 }

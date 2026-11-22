@@ -73,6 +73,8 @@ interface CachedPage {
 }
 
 const PAGE_MARGIN = 12;
+/** Space between pages in continuous scroll (CSS pixels). */
+const PAGE_GAP = 16;
 
 /** An item of an object library, ready to be placed with the "stamp" tool. */
 export interface Stamp {
@@ -413,6 +415,10 @@ export class InkSurface {
 
   /** Keep the page on screen. */
   clampView(): void {
+    if (this.scrolling) {
+      this.clampContinuous();
+      return;
+    }
     const p = this.page;
     const { scale } = this.view;
     const pw = p.w * scale;
@@ -420,6 +426,101 @@ export class InkSurface {
     const clamp = (o: number, size: number, avail: number) =>
       size + 2 * PAGE_MARGIN <= avail ? (avail - size) / 2 : Math.min(PAGE_MARGIN, Math.max(avail - size - PAGE_MARGIN, o));
     this.view = { scale, ox: clamp(this.view.ox, pw, this.width), oy: clamp(this.view.oy, ph, this.height) };
+  }
+
+  /** Move the view by CSS pixels (scrolling), redrawing right away. */
+  scrollBy(dx: number, dy: number): void {
+    if (dx === 0 && dy === 0) return;
+    const v = this.view;
+    this.view = { ...v, ox: v.ox + dx, oy: v.oy + dy };
+    this.clampView();
+    this.renderAll();
+    this.selectionOverlay.update();
+    this.textEditor.position();
+  }
+
+  /** Continuous scroll is on and there is more than one page to scroll through. */
+  get scrolling(): boolean {
+    return this.settings.continuous && this.doc.pages.length > 1;
+  }
+
+  /**
+   * Continuous scroll: the page in the middle of the screen becomes the page on
+   * screen (the one that is written on), without anything moving; the first
+   * page's top and the last page's bottom stay on screen.
+   */
+  private clampContinuous(): void {
+    const { scale } = this.view;
+    let { ox, oy } = this.view;
+    const before = this.pageIdx;
+    // not in the middle of a gesture that changes the page (eraser, moving)
+    if (this.work === null) {
+      const mid = this.height / 2;
+      for (let guard = 0; guard < this.doc.pages.length; guard++) {
+        const cur = this.doc.pages[this.pageIdx];
+        const next = this.doc.pages[this.pageIdx + 1];
+        const prev = this.doc.pages[this.pageIdx - 1];
+        if (next && oy + cur.h * scale + PAGE_GAP / 2 < mid) {
+          oy += cur.h * scale + PAGE_GAP;
+          ox += ((cur.w - next.w) * scale) / 2;
+          this.pageIdx++;
+        } else if (prev && oy - PAGE_GAP / 2 > mid) {
+          oy -= prev.h * scale + PAGE_GAP;
+          ox += ((cur.w - prev.w) * scale) / 2;
+          this.pageIdx--;
+        } else break;
+      }
+    }
+    const p = this.page;
+    const pw = p.w * scale;
+    const ph = p.h * scale;
+    ox = pw + 2 * PAGE_MARGIN <= this.width ? (this.width - pw) / 2 : Math.min(PAGE_MARGIN, Math.max(this.width - pw - PAGE_MARGIN, ox));
+    // a page that fits stops in the middle of the screen, a longer one at the screen's edge
+    const fits = ph + 2 * PAGE_MARGIN <= this.height;
+    if (this.pageIdx === this.doc.pages.length - 1) oy = Math.max(oy, fits ? (this.height - ph) / 2 : this.height - ph - PAGE_MARGIN);
+    if (this.pageIdx === 0) oy = Math.min(oy, fits ? (this.height - ph) / 2 : PAGE_MARGIN);
+    this.view = { scale, ox, oy };
+    if (this.pageIdx !== before) this.scrolledToPage();
+  }
+
+  /** Scrolling made another page the page on screen. */
+  private scrolledToPage(): void {
+    // (not input.cancel(): the scroll that got here is still going on)
+    this.textEditor.commit();
+    this.setSelection(EMPTY_SELECTION);
+    this.emitPage();
+  }
+
+  /**
+   * Continuous scroll: make the page under a point of the screen the page on
+   * screen (before the pen writes on it). Nothing moves on screen.
+   */
+  activatePageAt(clientY: number, rect = this.el.getBoundingClientRect()): void {
+    if (!this.scrolling || this.work !== null) return;
+    const y = clientY - rect.top;
+    const { scale } = this.view;
+    let { ox, oy } = this.view;
+    let i = this.pageIdx;
+    const cur = () => this.doc.pages[i];
+    while (i < this.doc.pages.length - 1 && y > oy + cur().h * scale + PAGE_GAP / 2) {
+      const next = this.doc.pages[i + 1];
+      oy += cur().h * scale + PAGE_GAP;
+      ox += ((cur().w - next.w) * scale) / 2;
+      i++;
+    }
+    while (i > 0 && y < oy - PAGE_GAP / 2) {
+      const prev = this.doc.pages[i - 1];
+      oy -= prev.h * scale + PAGE_GAP;
+      ox += ((cur().w - prev.w) * scale) / 2;
+      i--;
+    }
+    if (i === this.pageIdx) return;
+    this.textEditor.commit();
+    this.setSelection(EMPTY_SELECTION);
+    this.pageIdx = i;
+    this.view = { scale, ox, oy };
+    this.emitPage();
+    this.host.viewChanged?.();
   }
 
   /** Zoom by `k` around a point (CSS pixels in the surface). */
@@ -505,14 +606,53 @@ export class InkSurface {
     ctx.lineWidth = 1 / this.view.scale;
     ctx.strokeStyle = this.settings.eink ? "#000000" : "#b0b0b0";
     ctx.strokeRect(0, 0, page.w, page.h);
+    if (this.scrolling) this.paintNeighbours(ctx, page, k);
     ctx.restore();
+  }
+
+  /**
+   * Continuous scroll: the pages above and below the page on screen, as far as
+   * they are visible (drawn in its page units, centred on it).
+   */
+  private paintNeighbours(ctx: CanvasRenderingContext2D, page: Page, k: number): void {
+    const idx = this.doc.pages.findIndex((p) => p.id === page.id);
+    if (idx < 0) return;
+    const { scale, oy } = this.view;
+    const gap = PAGE_GAP / scale;
+    const draw = (p: Page, dy: number) => {
+      ctx.save();
+      ctx.translate((page.w - p.w) / 2, dy);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, p.w, p.h);
+      ctx.clip();
+      drawPage(ctx, p, { images: this.host.images, pixelScale: k, clip: null, handLinks: this._meta.handLinks });
+      ctx.restore();
+      ctx.strokeRect(0, 0, p.w, p.h);
+      ctx.restore();
+    };
+    let y = 0;
+    for (let j = idx - 1; j >= 0; j--) {
+      const p = this.doc.pages[j];
+      y -= p.h + gap;
+      if (oy + (y + p.h) * scale < 0) break;
+      draw(p, y);
+    }
+    y = page.h + gap;
+    for (let j = idx + 1; j < this.doc.pages.length; j++) {
+      if (oy + y * scale > this.height) break;
+      const p = this.doc.pages[j];
+      draw(p, y);
+      y += p.h + gap;
+    }
   }
 
   /** Redraw everything (uses the page cache when possible). */
   renderAll(): void {
     if (this.width === 0) return;
     const page = this.page;
-    const cached = this.cache.get(page.id);
+    // (continuous scroll: a cached picture could show neighbours as they were)
+    const cached = this.scrolling ? undefined : this.cache.get(page.id);
     if (cached && cached.page === page && cached.key === this.renderKey(page) && this.hidden.size === 0) {
       this.bctx.save();
       this.bctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -598,7 +738,7 @@ export class InkSurface {
     if (this.preloadTimer !== null) window.clearTimeout(this.preloadTimer);
     this.preloadTimer = window.setTimeout(() => {
       this.preloadTimer = null;
-      if (this.destroyed || this.input.busy) return;
+      if (this.destroyed || this.input.busy || this.scrolling) return;
       for (const i of [this.pageIdx + 1, this.pageIdx - 1]) {
         const page = this.doc.pages[i];
         if (!page) continue;
@@ -849,6 +989,7 @@ export class InkSurface {
 
   setSettings(patch: Partial<SurfaceSettings>): void {
     const fitChanged = patch.fit !== undefined && patch.fit !== this.settings.fit;
+    const continuousChanged = patch.continuous !== undefined && patch.continuous !== this.settings.continuous;
     const latencyChanged = patch.lowLatency !== undefined && patch.lowLatency !== this.settings.lowLatency;
     this.settings = { ...this.settings, ...patch };
     if (latencyChanged) {
@@ -862,7 +1003,10 @@ export class InkSurface {
       this.bctx = this.context(fresh, true);
       this.renderAll();
     }
-    if (fitChanged) this.resetZoom();
+    if (fitChanged || continuousChanged) {
+      this.cache.clear();
+      this.resetZoom();
+    }
   }
 
   // ------------------------------------------------------------------ selection

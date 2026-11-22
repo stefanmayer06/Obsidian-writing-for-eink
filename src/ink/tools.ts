@@ -1,8 +1,8 @@
 import { containsPoint, distanceToSegment, inflate, type Pt, type Rect } from "../core/geometry";
 import { eraseFromStroke, isScribble, scribbleTargets, strokeErase, strokesInLasso } from "../core/ink/erase";
 import { figureBounds, imageBounds, linkBounds, pointInPolygon, rectInside, strokeBounds, strokeDistance, strokePointBounds, textBounds, unionRect } from "../core/ink/geom";
-import { addItems, EMPTY_SELECTION, makeStroke, q, qp, replaceItems, type Items, type Page, type PenType, type Selection, type Stroke } from "../core/ink/model";
-import { StrokeBuilder, type Segment } from "../core/ink/pens";
+import { addItems, EMPTY_SELECTION, makeStroke, q, qp, replaceItems, withStroke, type Items, type Page, type PenType, type Selection, type Stroke } from "../core/ink/model";
+import { linePattern, lineStyleFields, patternWidth, StrokeBuilder, type LineStyle, type Segment } from "../core/ink/pens";
 import { isConnectorKind, recognizeShape, shapeFromDrag } from "../core/ink/shapes";
 import { connectorsOf, followMoves, makeConnector, rerouted, shapeAt } from "../core/ink/connectors";
 import { closedOutline, fillOutline } from "../core/ink/fill";
@@ -76,6 +76,13 @@ class PenSession implements ToolSession {
   private readonly penType: PenType;
   private readonly color: string;
   private readonly width: number;
+  /** Solid, dashed or dotted (the highlighter is always solid). */
+  private readonly lineStyle: LineStyle;
+  /**
+   * Drawn whole on the preview canvas until it is finished, not piece by piece on
+   * the page: the highlighter (blended) and dashed or dotted lines (one pattern).
+   */
+  private readonly onWet: boolean;
 
   constructor(
     private s: InkSurface,
@@ -87,8 +94,10 @@ class PenSession implements ToolSession {
     this.penType = marker ? "marker" : t.pen;
     this.color = marker ? t.markerColor : t.color;
     this.width = t.widths[this.penType];
+    this.lineStyle = marker ? "solid" : t.lineStyle;
+    this.onWet = marker || this.lineStyle !== "solid";
     this.builder = new StrokeBuilder(this.penType, this.color, this.width);
-    if (!marker) s.beginLive();
+    if (!this.onWet) s.beginLive();
     this.add(first);
     this.redrawMarker();
     this.armHold(first);
@@ -104,7 +113,7 @@ class PenSession implements ToolSession {
     this.lastY = y;
     const seg = this.builder.add(x, y, pr);
     if (!seg) return;
-    if (!this.marker) {
+    if (!this.onWet) {
       this.pending.push(seg);
       return;
     }
@@ -123,7 +132,7 @@ class PenSession implements ToolSession {
   }
 
   private stroke(): Stroke {
-    return makeStroke({ pen: this.penType, color: this.color, width: this.width, pts: Float32Array.from(this.pts) });
+    return makeStroke({ pen: this.penType, color: this.color, width: this.width, pts: Float32Array.from(this.pts), ...lineStyleFields(this.lineStyle) });
   }
 
   /**
@@ -132,7 +141,7 @@ class PenSession implements ToolSession {
    * finished stroke will be.
    */
   private redrawMarker(): void {
-    if (!this.marker || this.pts.length === 0) return;
+    if (!this.onWet || this.pts.length === 0) return;
     const ctx = this.s.wetContext();
     const end = this.builder.end();
     const path = this.markerPath ? new Path2D(this.markerPath) : new Path2D();
@@ -140,11 +149,21 @@ class PenSession implements ToolSession {
       if (!this.markerPath) path.moveTo(end.a.x, end.a.y);
       segmentPath(path, end);
     }
-    ctx.globalCompositeOperation = "multiply";
-    ctx.strokeStyle = end?.color ?? this.color;
-    ctx.lineWidth = end?.w ?? this.width;
+    if (this.marker) {
+      ctx.globalCompositeOperation = "multiply";
+      ctx.strokeStyle = end?.color ?? this.color;
+      ctx.lineWidth = end?.w ?? this.width;
+      ctx.stroke(path);
+      ctx.globalCompositeOperation = "source-over";
+      return;
+    }
+    // a dashed or dotted line: its whole path at one width, as it will be drawn on the page
+    const fields = lineStyleFields(this.lineStyle);
+    ctx.setLineDash(linePattern({ width: this.width, ...fields }));
+    ctx.strokeStyle = this.color;
+    ctx.lineWidth = patternWidth(this.width, this.lineStyle === "dotted");
     ctx.stroke(path);
-    ctx.globalCompositeOperation = "source-over";
+    ctx.setLineDash([]);
   }
 
   /**
@@ -176,14 +195,16 @@ class PenSession implements ToolSession {
     const live = this.stroke();
     const shape = recognizeShape(live);
     if (!shape) return;
-    this.snapped = shape.stroke;
+    // the clean shape keeps the line style (a dashed box stays dashed)
+    this.snapped = this.lineStyle === "solid" ? shape.stroke : withStroke(shape.stroke, lineStyleFields(this.lineStyle));
+    const snapped = this.snapped;
     // replace the hand-drawn stroke with the clean shape
-    if (this.marker) {
-      drawStroke(this.s.wetContext(), shape.stroke);
+    if (this.onWet) {
+      drawStroke(this.s.wetContext(), snapped);
     } else {
       this.s.renderRect(strokeBounds(live));
       this.s.pageTransform(this.s.bctx);
-      drawStroke(this.s.bctx, shape.stroke);
+      drawStroke(this.s.bctx, snapped);
     }
     // the hand-drawn line the firmware is showing (instant ink) gives way to the shape
     this.s.host.inkDiscarded?.();
@@ -202,14 +223,14 @@ class PenSession implements ToolSession {
     if (this.holdTimer !== null) window.clearTimeout(this.holdTimer);
     this.holdTimer = null;
     if (last && !this.snapped) this.add(last);
-    if (!this.marker && !this.snapped) {
+    if (!this.onWet && !this.snapped) {
       const seg = this.builder.end();
       if (seg) this.pending.push(seg);
       this.flush();
     }
     if (this.pts.length === 0) return;
     const stroke = this.snapped ?? this.stroke();
-    if (this.marker) this.s.clearWet();
+    if (this.onWet) this.s.clearWet();
     const page = this.s.page;
     // scratching over writing erases it
     if (!this.snapped && !this.marker && this.s.settings.scribbleErase && isScribble(stroke)) {
@@ -223,14 +244,14 @@ class PenSession implements ToolSession {
         return;
       }
     }
-    // pen ink is already on the canvas exactly as it will stay; highlighter and shapes are redrawn in place
-    this.s.commitPage(addItems(page, { strokes: [stroke] }), this.marker || this.snapped ? strokeBounds(stroke) : null);
+    // pen ink is already on the canvas exactly as it will stay; highlighter, dashed/dotted lines and shapes are redrawn in place
+    this.s.commitPage(addItems(page, { strokes: [stroke] }), this.onWet || this.snapped ? strokeBounds(stroke) : null);
   }
 
   cancel(): void {
     if (this.holdTimer !== null) window.clearTimeout(this.holdTimer);
     this.holdTimer = null;
-    if (this.marker) this.s.clearWet();
+    if (this.onWet) this.s.clearWet();
     else if (this.pts.length > 0) this.s.renderRect(strokeBounds(this.snapped ?? this.stroke()));
   }
 }
