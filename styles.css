@@ -12,15 +12,23 @@
   position: relative;
 }
 
-.ink-view-content[data-toolbar="bottom"] {
+/*
+ * Where the toolbar is. These must be as specific as the rule above, or its
+ * "column" wins: a side toolbar then takes the whole width and the page gets
+ * no height at all, and a bottom toolbar stays at the top.
+ */
+.ink-view-content[data-toolbar="bottom"],
+.workspace-leaf-content[data-type="ink-notebook"] .view-content.ink-view-content[data-toolbar="bottom"] {
   flex-direction: column-reverse;
 }
 
-.ink-view-content[data-toolbar="left"] {
+.ink-view-content[data-toolbar="left"],
+.workspace-leaf-content[data-type="ink-notebook"] .view-content.ink-view-content[data-toolbar="left"] {
   flex-direction: row;
 }
 
-.ink-view-content[data-toolbar="right"] {
+.ink-view-content[data-toolbar="right"],
+.workspace-leaf-content[data-type="ink-notebook"] .view-content.ink-view-content[data-toolbar="right"] {
   flex-direction: row-reverse;
 }
 
