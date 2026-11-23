@@ -1,5 +1,8 @@
 import type { FillStyle, PenType } from "../core/ink/model";
 import type { ShapeKind } from "../core/ink/shapes";
+import type { LineStyle } from "../core/ink/pens";
+import { DEFAULT_PEN_PALETTE } from "../core/palette";
+import type { PanelPos } from "../core/panelPosition";
 import type { ImageSource } from "./render";
 
 /** "stamp" places an item of an object library (see InkSurface.stamp). */
@@ -27,9 +30,20 @@ export interface ToolState {
   fillStyle: FillStyle;
   /** Font size of new text boxes (page units). */
   textSize: number;
-  /** Two quick pens (like the Boox Notes' favourite pens). */
+  /** Solid, dashed or dotted pen lines. */
+  lineStyle: LineStyle;
+  /**
+   * Quick pens (like the Boox Notes' favourite pens): always MAX_FAVORITES of them;
+   * the toolbar shows the first `favoriteCount` (see SurfaceSettings).
+   */
   favorites: Array<{ pen: WritingPen; color: string; width: number }>;
 }
+
+/** The most favourite pens there can be; the fewest the toolbar shows. */
+export const MAX_FAVORITES = 8;
+/** About this many favourite pens fit on the toolbar; it scrolls sideways to the others. */
+export const VISIBLE_FAVORITES = 4;
+export const MIN_FAVORITES = 2;
 
 export const DEFAULT_TOOL_STATE: ToolState = {
   tool: "pen",
@@ -44,9 +58,16 @@ export const DEFAULT_TOOL_STATE: ToolState = {
   fillColor: "#c4dfff",
   fillStyle: "solid",
   textSize: 24,
+  lineStyle: "solid",
   favorites: [
     { pen: "fountain", color: "#000000", width: 1.8 },
     { pen: "ballpoint", color: "#d32f2f", width: 1.5 },
+    { pen: "ballpoint", color: "#1565c0", width: 1.5 },
+    { pen: "fountain", color: "#2e7d32", width: 1.8 },
+    { pen: "pencil", color: "#4d4d4d", width: 1.5 },
+    { pen: "brush", color: "#000000", width: 4 },
+    { pen: "calligraphy", color: "#6a1b9a", width: 4 },
+    { pen: "ballpoint", color: "#ef6c00", width: 1.5 },
   ],
 };
 
@@ -66,6 +87,20 @@ export interface SurfaceSettings {
   scribbleErase: boolean;
   holdToShape: boolean;
   fit: FitMode;
+  /** Pages one below the other, scrolled through like a PDF reader (instead of turned one at a time). */
+  continuous: boolean;
+  /** Pens left out of the pen bar and the pen's options (at least one is always offered). */
+  hiddenPens: WritingPen[];
+  /** Tapping the pen or highlighter opens the floating pen bar (instead of the options card). */
+  penBar: boolean;
+  /** Where the pen bar was moved to: its top-left corner as fractions of the view (null: under the toolbar). */
+  penBarPos: PanelPos | null;
+  /** The pen bar's colours ("#rrggbb"; added with the colour picker, removed by holding one). */
+  penColors: string[];
+  /** How many thicknesses the pen bar shows (1–5, spread from thin to thick). */
+  penBarSizes: number;
+  /** How many favourite pens there are on the toolbar (MIN_FAVORITES … MAX_FAVORITES; more than VISIBLE_FAVORITES scroll). */
+  favoriteCount: number;
   /** Low-latency canvas (Chrome's "desynchronized" mode). */
   lowLatency: boolean;
   /** White surroundings and no animations (e-ink). */
@@ -82,6 +117,13 @@ export const DEFAULT_SURFACE_SETTINGS: SurfaceSettings = {
   scribbleErase: true,
   holdToShape: true,
   fit: "page",
+  continuous: false,
+  favoriteCount: 2,
+  hiddenPens: [],
+  penBar: false,
+  penBarPos: null,
+  penColors: [...DEFAULT_PEN_PALETTE],
+  penBarSizes: 5,
   lowLatency: true,
   eink: false,
 };
@@ -100,6 +142,8 @@ export interface SurfaceHost {
   /** Draw a Lucide icon into an element (Obsidian's setIcon). */
   icon(el: HTMLElement, name: string): void;
   openLink(target: string, newTab: boolean): void;
+  /** Open a web or mail address (a link inside a PDF page); window.open when missing. */
+  openUrl?(url: string): void;
   /** The notebook or its metadata changed (save soon). */
   changed(): void;
   pageChanged?(index: number, count: number): void;

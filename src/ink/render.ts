@@ -1,10 +1,11 @@
 import { intersects, type Rect } from "../core/geometry";
 import { paperDrawing } from "../core/paper";
 import { figureBounds, imageBounds, LINK_CHIP_HEIGHT, linkBounds, linkChipWidth, linkLabel, strokeBounds, strokePointBounds, textBounds } from "../core/ink/geom";
-import { dashPattern, isMarker, strokeRuns, type Segment } from "../core/ink/pens";
+import { isMarker, linePattern, strokeRuns, type Segment } from "../core/ink/pens";
 import { fillGeometry } from "../core/ink/fill";
 import type { Figure, ImageItem, Items, LinkItem, Page, Stroke, TextBox } from "../core/ink/model";
 import type { TextMeasure } from "../core/ink/fromMermaid";
+import type { PdfLink } from "../core/pdfLinks";
 
 /**
  * Drawing pages on a canvas. Used by the ink view, page thumbnails, figures on
@@ -17,6 +18,8 @@ export interface ImageSource {
   image(path: string): CanvasImageSource | null;
   /** The PDF page rendered at least `pixelWidth` wide, or null while it is rendering. */
   pdfPage(path: string, page: number, pixelWidth: number): CanvasImageSource | null;
+  /** The links on a PDF page, or null while they are loading. */
+  pdfLinks?(path: string, page: number): readonly PdfLink[] | null;
 }
 
 export const NO_IMAGES: ImageSource = { image: () => null, pdfPage: () => null };
@@ -96,7 +99,7 @@ export function drawStrokeLine(ctx: Ctx, s: Stroke): void {
   if (marker) ctx.globalCompositeOperation = "multiply";
   for (const run of cachedRuns(s)) {
     // arrow heads stay solid on a dashed line
-    ctx.setLineDash(s.dash && !run.head ? dashPattern(s.width) : []);
+    ctx.setLineDash(run.head ? [] : linePattern(s));
     ctx.strokeStyle = run.color;
     ctx.lineWidth = run.w;
     ctx.stroke(run.path);

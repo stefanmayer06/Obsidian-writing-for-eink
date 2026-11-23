@@ -76,6 +76,7 @@ export function eraseFromStroke(s: Stroke, a: Pt, b: Pt, radius: number): Stroke
           pts: pts.slice(start * 3, end * 3),
           poly: s.poly,
           dash: s.dash,
+          dot: s.dot,
           arrow: s.arrow && isTail,
           id: newId(),
         }),

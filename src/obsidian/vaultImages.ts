@@ -1,4 +1,6 @@
 import { loadPdfJs, TFile, type App } from "obsidian";
+import { pdfLinkRect, safePdfUrl, type PdfLink } from "../core/pdfLinks";
+import { flattenOutline, MAX_OUTLINE_ENTRIES, type PdfOutlineEntry, type PdfOutlineNode } from "../core/pdfOutline";
 import type { ImageSource } from "../ink/render";
 
 /**
@@ -17,17 +19,37 @@ interface PdfEntry {
 interface PdfViewport {
   width: number;
   height: number;
+  convertToViewportRectangle(rect: number[]): number[];
+}
+
+/** A PDF.js annotation; only Link annotations (with `url` or `dest`) are used. */
+interface PdfAnnotation {
+  subtype?: string;
+  rect?: number[];
+  url?: string;
+  dest?: string | unknown[] | null;
 }
 
 interface PdfPage {
   getViewport(params: { scale: number }): PdfViewport;
   render(params: { canvasContext: CanvasRenderingContext2D; viewport: PdfViewport }): { promise: Promise<void> };
+  getAnnotations?(params?: { intent?: string }): Promise<PdfAnnotation[]>;
   cleanup?(): void;
 }
 
 interface PdfDoc {
   numPages: number;
   getPage(pageNumber: number): Promise<PdfPage>;
+  getDestination?(name: string): Promise<unknown[] | null>;
+  getPageIndex?(ref: unknown): Promise<number>;
+  getOutline?(): Promise<PdfJsOutlineItem[] | null>;
+}
+
+interface PdfJsOutlineItem {
+  title?: string;
+  dest?: string | unknown[] | null;
+  url?: string | null;
+  items?: PdfJsOutlineItem[];
 }
 
 interface PdfJs {
@@ -47,6 +69,10 @@ export class VaultImages implements ImageSource {
   private images = new Map<string, HTMLImageElement | "loading" | "error">();
   private pdfs = new Map<string, PdfEntry>();
   private pages = new Map<string, RenderedPage>();
+  /** Links per PDF page ("path#page"); "loading" while PDF.js reads them. */
+  private links = new Map<string, readonly PdfLink[] | "loading">();
+  /** Outlines per PDF path. */
+  private outlines = new Map<string, Promise<PdfOutlineEntry[]>>();
   private rendering = new Set<string>();
   private queue: Array<() => Promise<void>> = [];
   private busy = false;
@@ -73,8 +99,10 @@ export class VaultImages implements ImageSource {
   /** Forget a file (it changed or was deleted). */
   invalidate(path: string): void {
     this.images.delete(path);
+    this.outlines.delete(path);
     if (this.pdfs.delete(path)) {
       for (const key of [...this.pages.keys()]) if (key.startsWith(`${path}#`)) this.pages.delete(key);
+      for (const key of [...this.links.keys()]) if (key.startsWith(`${path}#`)) this.links.delete(key);
     }
   }
 
@@ -82,6 +110,89 @@ export class VaultImages implements ImageSource {
     this.images.clear();
     this.pdfs.clear();
     this.pages.clear();
+    this.links.clear();
+    this.outlines.clear();
+  }
+
+  /** The PDF's outline (table of contents) as a list; empty when it has none. */
+  pdfOutline(path: string): Promise<PdfOutlineEntry[]> {
+    let hit = this.outlines.get(path);
+    if (!hit) {
+      hit = this.loadOutline(path);
+      this.outlines.set(path, hit);
+      hit.catch(() => this.outlines.delete(path));
+    }
+    return hit;
+  }
+
+  private async loadOutline(path: string): Promise<PdfOutlineEntry[]> {
+    const doc = await this.pdf(path);
+    const items = (await doc.getOutline?.()) ?? [];
+    let count = 0;
+    const convert = async (list: PdfJsOutlineItem[]): Promise<PdfOutlineNode[]> => {
+      const out: PdfOutlineNode[] = [];
+      for (const it of list) {
+        if (++count > MAX_OUTLINE_ENTRIES) break;
+        const url = safePdfUrl(it.url) ?? undefined;
+        const page = !url && it.dest ? ((await this.destPage(doc, it.dest)) ?? undefined) : undefined;
+        out.push({ title: it.title ?? "", page, url, items: it.items?.length ? await convert(it.items) : [] });
+      }
+      return out;
+    };
+    return flattenOutline(await convert(items));
+  }
+
+  pdfLinks(path: string, page: number): readonly PdfLink[] | null {
+    const key = `${path}#${page}`;
+    const hit = this.links.get(key);
+    if (hit === "loading") return null;
+    if (hit) return hit;
+    this.links.set(key, "loading");
+    void this.loadLinks(path, page).then(
+      (links) => {
+        if (this.links.get(key) === "loading") this.links.set(key, links);
+      },
+      (e) => {
+        console.warn("Ink Notebook: could not read the links of a PDF page", e);
+        if (this.links.get(key) === "loading") this.links.set(key, []);
+      },
+    );
+    return null;
+  }
+
+  /** The Link annotations of a PDF page: web addresses and jumps to its other pages. */
+  private async loadLinks(path: string, pageNo: number): Promise<PdfLink[]> {
+    const doc = await this.pdf(path);
+    const page = await doc.getPage(pageNo);
+    if (!page.getAnnotations) return [];
+    const viewport = page.getViewport({ scale: 1 });
+    const out: PdfLink[] = [];
+    for (const a of await page.getAnnotations({ intent: "display" })) {
+      if (a.subtype !== "Link" || !a.rect) continue;
+      const rect = pdfLinkRect(viewport.convertToViewportRectangle(a.rect), viewport.width, viewport.height);
+      if (!rect) continue;
+      const url = safePdfUrl(a.url);
+      if (url) {
+        out.push({ rect, url });
+        continue;
+      }
+      const target = a.dest ? await this.destPage(doc, a.dest) : null;
+      if (target) out.push({ rect, page: target });
+    }
+    return out;
+  }
+
+  /** The page (1-based) a PDF destination points to, or null. */
+  private async destPage(doc: PdfDoc, dest: string | unknown[]): Promise<number | null> {
+    try {
+      const explicit = typeof dest === "string" ? await doc.getDestination?.(dest) : dest;
+      const ref = Array.isArray(explicit) ? explicit[0] : null;
+      if (typeof ref === "number") return ref + 1 <= doc.numPages ? ref + 1 : null;
+      if (ref && typeof ref === "object" && doc.getPageIndex) return (await doc.getPageIndex(ref)) + 1;
+    } catch {
+      /* a broken destination: not a link */
+    }
+    return null;
   }
 
   image(path: string): CanvasImageSource | null {
@@ -205,6 +316,8 @@ export class VaultImages implements ImageSource {
     await page.render({ canvasContext: ctx, viewport }).promise;
     page.cleanup?.();
     this.pages.set(`${path}#${pageNo}`, { canvas, width: canvas.width, used: Date.now() });
+    // read the page's links now, so they are there by the time it is tapped
+    this.pdfLinks(path, pageNo);
     // keep memory in check on tablets
     if (this.pages.size > MAX_PDF_PAGES) {
       const oldest = [...this.pages.entries()].sort((a, b) => a[1].used - b[1].used).slice(0, this.pages.size - MAX_PDF_PAGES);

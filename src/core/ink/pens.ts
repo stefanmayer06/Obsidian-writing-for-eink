@@ -54,6 +54,17 @@ export const INK_COLORS: ReadonlyArray<{ color: string; label: string }> = [
   { color: "#6d4c41", label: "Brown" },
 ];
 
+/** The pen bar's colours: the ink colours and some more (its colour strip scrolls sideways). */
+export const PEN_BAR_COLORS: ReadonlyArray<{ color: string; label: string }> = [
+  ...INK_COLORS,
+  { color: "#d81b60", label: "Pink" },
+  { color: "#00897b", label: "Teal" },
+  { color: "#039be5", label: "Light blue" },
+  { color: "#283593", label: "Navy" },
+  { color: "#7cb342", label: "Light green" },
+  { color: "#bdbdbd", label: "Light grey" },
+];
+
 export const MARKER_COLORS: ReadonlyArray<{ color: string; label: string }> = [
   { color: "#ffe14d", label: "Yellow" },
   { color: "#9be38f", label: "Green" },
@@ -313,7 +324,15 @@ export function strokeRuns(s: Stroke): StrokeRun[] {
   let cur: StrokeRun | null = null;
   let endX = NaN;
   let endY = NaN;
-  const line = lineSegments(s);
+  let line = lineSegments(s);
+  // A dashed or dotted line is one width and one colour, so it is one path and its
+  // pattern runs on evenly. (A pattern starts again with every piece of a path:
+  // the pencil, whose shade follows the pressure, was cut into pieces shorter than
+  // a dash, and its line came out solid wherever the pressure changed.)
+  if (s.dash || s.dot) {
+    const w = patternWidth(s.width, !!s.dot);
+    line = line.map((seg) => (seg.w === w && seg.color === s.color ? seg : { ...seg, w, color: s.color }));
+  }
   const all = [...line, ...headSegments(s)];
   all.forEach((seg, i) => {
     const head = i >= line.length;
@@ -335,4 +354,65 @@ export function strokeRuns(s: Stroke): StrokeRun[] {
 /** Dash pattern for dashed shapes, relative to the stroke width. */
 export function dashPattern(width: number): [number, number] {
   return [Math.max(6, width * 4), Math.max(5, width * 3)];
+}
+
+/**
+ * Dot pattern for dotted lines: (almost) zero-length dashes that the round cap
+ * draws as dots, a dot's width (see patternWidth) and a bit apart.
+ */
+export function dotPattern(width: number): [number, number] {
+  return [0.01, Math.max(4, width * 4)];
+}
+
+/** Dots are drawn this much wider than the pen's line, so that a thin pen's dots still show. */
+const DOT_SCALE = 1.6;
+
+/**
+ * `count` of a pen's five thickness presets, spread from thin to thick (the pen bar
+ * shows as many as you choose): 1 is the middle one, 3 thin, medium and thick.
+ */
+export function spreadPresets(presets: readonly number[], count: number): number[] {
+  const n = Math.max(1, Math.min(presets.length, Math.round(count)));
+  if (n >= presets.length) return [...presets];
+  if (n === 1) return [presets[Math.floor((presets.length - 1) / 2)]];
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const p = presets[Math.round((i * (presets.length - 1)) / (n - 1))];
+    if (!out.includes(p)) out.push(p);
+  }
+  return out;
+}
+
+/** The pens that write (everything but the highlighter), in the order they are offered. */
+export const WRITING_PEN_TYPES = ["fountain", "ballpoint", "pencil", "brush", "calligraphy"] as const;
+export type WritingPenType = (typeof WRITING_PEN_TYPES)[number];
+
+/** The pens offered in the pen bar and the pen's options: all but the hidden ones, and never none. */
+export function shownPens(hidden: readonly string[]): WritingPenType[] {
+  const shown = WRITING_PEN_TYPES.filter((p) => !hidden.includes(p));
+  return shown.length > 0 ? shown : [...WRITING_PEN_TYPES];
+}
+
+/** How a pen line is drawn: solid, dashed or dotted. */
+export type LineStyle = "solid" | "dashed" | "dotted";
+export const LINE_STYLES: readonly LineStyle[] = ["solid", "dashed", "dotted"];
+
+/** A stroke's dash pattern for canvas and PDF (empty: solid). Dotted wins over dashed. */
+export function linePattern(s: { readonly width: number; readonly dash?: boolean; readonly dot?: boolean }): number[] {
+  return s.dot ? dotPattern(s.width) : s.dash ? dashPattern(s.width) : [];
+}
+
+/** The stroke fields for a line style. */
+export function lineStyleFields(style: LineStyle): { dash?: true; dot?: true } {
+  return style === "dashed" ? { dash: true } : style === "dotted" ? { dot: true } : {};
+}
+
+/**
+ * The one width a dashed or dotted line is drawn with: the pen's base width. A
+ * line whose width changed with the pressure would restart its pattern at
+ * every change, which breaks the dashes up.
+ */
+export function patternWidth(width: number, dotted = false): number {
+  const w = dotted ? width * DOT_SCALE : width;
+  return Math.max(WIDTH_STEP, Math.round(w / WIDTH_STEP) * WIDTH_STEP);
 }

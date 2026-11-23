@@ -12,15 +12,23 @@
   position: relative;
 }
 
-.ink-view-content[data-toolbar="bottom"] {
+/*
+ * Where the toolbar is. These must be as specific as the rule above, or its
+ * "column" wins: a side toolbar then takes the whole width and the page gets
+ * no height at all, and a bottom toolbar stays at the top.
+ */
+.ink-view-content[data-toolbar="bottom"],
+.workspace-leaf-content[data-type="ink-notebook"] .view-content.ink-view-content[data-toolbar="bottom"] {
   flex-direction: column-reverse;
 }
 
-.ink-view-content[data-toolbar="left"] {
+.ink-view-content[data-toolbar="left"],
+.workspace-leaf-content[data-type="ink-notebook"] .view-content.ink-view-content[data-toolbar="left"] {
   flex-direction: row;
 }
 
-.ink-view-content[data-toolbar="right"] {
+.ink-view-content[data-toolbar="right"],
+.workspace-leaf-content[data-type="ink-notebook"] .view-content.ink-view-content[data-toolbar="right"] {
   flex-direction: row-reverse;
 }
 
@@ -361,6 +369,35 @@
   border-color: transparent transparent currentColor transparent;
 }
 
+/* the favourite pens: about four in sight (and a sliver of the next), the rest scroll sideways */
+.ink-toolbar .ink-tb-favs {
+  max-width: calc(4.4 * var(--ink-tb-size) + 8px);
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  touch-action: pan-x;
+}
+
+.ink-toolbar .ink-tb-favs::-webkit-scrollbar {
+  display: none;
+}
+
+.ink-toolbar[data-vertical] .ink-tb-favs {
+  max-width: none;
+  max-height: calc(4.4 * var(--ink-tb-size) + 14px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scroll-snap-type: y proximity;
+  touch-action: pan-y;
+}
+
+.ink-toolbar .ink-tb-favs .ink-btn.ink-tb-btn {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+}
+
 .ink-tb-fav .ink-fav-stroke {
   display: block;
   width: 24px;
@@ -412,6 +449,10 @@
 .ink-toolbar[data-fold="4"] .ink-tb-insert,
 .ink-toolbar[data-fold="5"] .ink-tb-insert,
 .ink-toolbar[data-fold="6"] .ink-tb-insert,
+.ink-toolbar[data-fold="3"] .ink-tb-outline,
+.ink-toolbar[data-fold="4"] .ink-tb-outline,
+.ink-toolbar[data-fold="5"] .ink-tb-outline,
+.ink-toolbar[data-fold="6"] .ink-tb-outline,
 .ink-toolbar[data-fold="3"] .ink-tb-library,
 .ink-toolbar[data-fold="4"] .ink-tb-library,
 .ink-toolbar[data-fold="5"] .ink-tb-library,
@@ -630,6 +671,13 @@
   font-weight: 600;
 }
 
+/* numbered "save as favourite" buttons when there are more than two */
+.ink-popover .ink-pop-wide.ink-fav-slot {
+  flex: 1 1 52px;
+  min-width: 52px;
+  padding: 6px 8px;
+}
+
 .ink-popover .ink-pop-wide.is-danger,
 .ink-menu-item.is-danger {
   color: var(--text-error);
@@ -727,6 +775,362 @@
 
 .ink-menu-label {
   font-size: 16px;
+}
+
+/* ---------- Floating pen bar --------------------------------------------- */
+
+.ink-penbar {
+  position: absolute;
+  z-index: var(--layer-popover, 30);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 16px);
+  padding: 4px 6px 4px 2px;
+  border: 2px solid var(--text-normal);
+  border-radius: 16px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+}
+
+.ink-penbar[hidden] {
+  display: none;
+}
+
+.ink-penbar.is-dragging {
+  opacity: 0.85;
+}
+
+body.ink-eink .ink-penbar,
+.ink-eink .ink-penbar {
+  box-shadow: none;
+}
+
+.ink-penbar-grip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 44px;
+  color: var(--text-muted);
+  cursor: grab;
+  touch-action: none;
+}
+
+.ink-penbar.is-dragging .ink-penbar-grip {
+  cursor: grabbing;
+}
+
+.ink-penbar-group {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 6px;
+  border-right: 1px solid var(--background-modifier-border);
+}
+
+/* doubled class: must beat Obsidian's default button styles */
+.ink-penbar .ink-btn.ink-penbar-btn {
+  /* buttons keep their size; the colour strip is what gives way on narrow screens */
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+}
+
+.ink-penbar .ink-btn.ink-penbar-btn.is-active {
+  border-color: var(--text-normal);
+}
+
+.ink-penbar .ink-btn.ink-penbar-size {
+  width: 36px;
+}
+
+.ink-penbar-line {
+  display: block;
+  width: 22px;
+  border-radius: 4px;
+}
+
+/* solid / dashed / dotted samples on the line style buttons */
+.ink-linestyle-sample {
+  display: block;
+  flex: none;
+  width: 24px;
+  height: 0;
+  border-top: 3px solid currentColor;
+}
+
+.ink-linestyle-sample.is-dashed {
+  border-top-style: dashed;
+}
+
+.ink-linestyle-sample.is-dotted {
+  border-top-style: dotted;
+}
+
+.ink-popover .ink-pop-wide.ink-linestyle-btn {
+  flex-basis: 90px;
+}
+
+.ink-penbar .ink-btn.ink-penbar-btn.ink-linestyle-btn {
+  width: 40px;
+}
+
+.ink-penbar-colors {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 120px;
+  /* about four colours in sight (and a sliver of the next); the rest scroll */
+  max-width: calc(4.5 * 34px + 4 * 8px + 12px);
+  padding: 4px 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  /* the strip scrolls itself: a press may also be a hold that lifts a colour to move it */
+  touch-action: none;
+}
+
+/* a colour held to be moved (or removed) */
+.ink-penbar button.ink-penbar-swatch.is-lifted {
+  transform: scale(1.25);
+  outline: 3px dashed var(--text-normal);
+  outline-offset: 3px;
+  z-index: 1;
+}
+
+.ink-penbar-colors.is-reordering {
+  cursor: grabbing;
+}
+
+/* dragged near an edge: it will dock there */
+.ink-penbar.is-snapping {
+  outline: 3px dashed var(--text-normal);
+  outline-offset: 4px;
+}
+
+/* shapes: the fill of new shapes, shown under the bucket */
+.ink-penbar .ink-btn.ink-penbar-btn.ink-penbar-fill {
+  position: relative;
+}
+
+.ink-penbar .ink-penbar-fill::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 5px;
+  height: 5px;
+  border: 1px solid var(--text-normal);
+  border-radius: 3px;
+  background: var(--swatch, transparent);
+}
+
+.ink-penbar .ink-penbar-fill.is-empty::after {
+  background: linear-gradient(to top right, transparent 45%, var(--text-normal) 45%, var(--text-normal) 55%, transparent 55%);
+}
+
+/* ---------- docked on the left or right: upright ---------- */
+
+.ink-penbar.is-vertical {
+  flex-direction: column;
+  max-width: none;
+  max-height: calc(100% - 16px);
+  padding: 2px 4px 6px;
+  /* on a very short screen the bar scrolls (the colour strip has given way already) */
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.ink-penbar.is-vertical .ink-btn.ink-penbar-btn {
+  height: 40px;
+}
+
+.ink-penbar.is-vertical .ink-penbar-grip {
+  width: 44px;
+  height: 26px;
+}
+
+.ink-penbar.is-vertical .ink-penbar-group {
+  flex-direction: column;
+  padding: 0 0 6px;
+  border-right: none;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.ink-penbar.is-vertical .ink-btn.ink-penbar-btn.ink-penbar-size,
+.ink-penbar.is-vertical .ink-btn.ink-penbar-btn.ink-linestyle-btn {
+  width: 44px;
+  height: 30px;
+}
+
+/* the groups and the "+" keep their size; only the colour strip shrinks */
+.ink-penbar.is-vertical > :not(.ink-penbar-colors) {
+  flex-shrink: 0;
+}
+
+.ink-penbar.is-vertical .ink-penbar-colors {
+  flex-direction: column;
+  min-width: 0;
+  min-height: 90px;
+  max-width: none;
+  max-height: calc(4.5 * 34px + 4 * 8px + 12px);
+  padding: 6px 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.ink-penbar-colors::-webkit-scrollbar {
+  display: none;
+}
+
+.ink-penbar button.ink-penbar-swatch {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  margin: 0;
+  padding: 0;
+  border: 2px solid var(--text-normal);
+  border-radius: 50%;
+  background: var(--swatch);
+  box-shadow: none;
+  scroll-snap-align: start;
+}
+
+/* "+": add a colour with the colour picker */
+.ink-penbar .ink-btn.ink-penbar-btn.ink-penbar-add {
+  width: 34px;
+  height: 34px;
+  border: 2px dashed var(--text-muted);
+  border-radius: 50%;
+  scroll-snap-align: start;
+}
+
+/* ---------- Colour picker ------------------------------------------------ */
+
+.ink-popover.ink-pop-colorpicker {
+  width: min(320px, calc(100% - 12px));
+}
+
+.ink-colorpicker {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* saturation left to right, brightness top to bottom, over the hue */
+.ink-cp-sv {
+  position: relative;
+  height: 170px;
+  border: 2px solid var(--text-normal);
+  border-radius: 10px;
+  background:
+    linear-gradient(to top, #000, rgba(0, 0, 0, 0)),
+    linear-gradient(to right, #fff, rgba(255, 255, 255, 0)),
+    var(--cp-hue, #f00);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.ink-cp-hue {
+  position: relative;
+  height: 28px;
+  border: 2px solid var(--text-normal);
+  border-radius: 14px;
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.ink-cp-thumb {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  outline: 2px solid #000;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.ink-cp-hue .ink-cp-thumb {
+  top: 50%;
+}
+
+.ink-cp-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ink-cp-preview {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: 2px solid var(--text-normal);
+  border-radius: 50%;
+}
+
+.ink-popover input.ink-cp-code {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  font-family: var(--font-monospace, monospace);
+  font-size: 16px;
+}
+
+.ink-penbar button.ink-penbar-swatch.is-active {
+  outline: 3px solid var(--text-normal);
+  outline-offset: 2px;
+}
+
+/* ---------- PDF outline -------------------------------------------------- */
+
+.ink-popover .ink-outline-item {
+  min-height: 44px;
+  padding-left: calc(10px + var(--ink-outline-depth, 0) * 18px);
+}
+
+.ink-outline-item .ink-menu-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.ink-outline-item .ink-menu-label {
+  overflow-wrap: anywhere;
+}
+
+.ink-outline-page {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* the section you are in: a bar and bold text, which also read on e-ink */
+.ink-popover .ink-outline-item.is-checked {
+  box-shadow: inset 4px 0 0 var(--text-normal);
+}
+
+.ink-outline-item.is-checked .ink-menu-label {
+  font-weight: 700;
 }
 
 /* ---------- Bookmark switcher -------------------------------------------- */
