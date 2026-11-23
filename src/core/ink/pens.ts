@@ -325,10 +325,13 @@ export function strokeRuns(s: Stroke): StrokeRun[] {
   let endX = NaN;
   let endY = NaN;
   let line = lineSegments(s);
-  // a dashed or dotted line is one width, so that its pattern runs on evenly
+  // A dashed or dotted line is one width and one colour, so it is one path and its
+  // pattern runs on evenly. (A pattern starts again with every piece of a path:
+  // the pencil, whose shade follows the pressure, was cut into pieces shorter than
+  // a dash, and its line came out solid wherever the pressure changed.)
   if (s.dash || s.dot) {
     const w = patternWidth(s.width, !!s.dot);
-    line = line.map((seg) => (seg.w === w ? seg : { ...seg, w }));
+    line = line.map((seg) => (seg.w === w && seg.color === s.color ? seg : { ...seg, w, color: s.color }));
   }
   const all = [...line, ...headSegments(s)];
   all.forEach((seg, i) => {

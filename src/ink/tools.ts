@@ -584,13 +584,15 @@ class ShapeSession implements ToolSession {
   private shape(): Stroke {
     const t = this.s.tools;
     const width = Math.max(1, t.widths[t.pen]);
+    let shape: Stroke;
     if (this.connector) {
       // an arrow within one shape (say, in a big box) is not attached to it
       const outline = this.from ? closedOutline(this.from) : null;
       const from = outline && !this.to && pointInPolygon(this.b.x, this.b.y, outline) ? null : this.from;
-      return makeConnector(this.a, this.b, from, this.to, { color: t.color, width, elbow: t.shape === "elbow" });
-    }
-    return shapeFromDrag(t.shape, this.a, this.b, { pen: t.pen, color: t.color, width, fill: t.shapeFill || undefined, fillStyle: t.fillStyle });
+      shape = makeConnector(this.a, this.b, from, this.to, { color: t.color, width, elbow: t.shape === "elbow" });
+    } else shape = shapeFromDrag(t.shape, this.a, this.b, { pen: t.pen, color: t.color, width, fill: t.shapeFill || undefined, fillStyle: t.fillStyle });
+    // the line style (the floating bar's solid / dashed / dotted) applies to shapes too
+    return t.lineStyle === "solid" ? shape : withStroke(shape, lineStyleFields(t.lineStyle));
   }
 
   move(points: InputPt[]): void {

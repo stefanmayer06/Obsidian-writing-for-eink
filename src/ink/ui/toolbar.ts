@@ -57,6 +57,9 @@ const TEXT_SIZES: Array<{ size: number; label: string }> = [
   { size: 44, label: "XL" },
 ];
 
+/** The tools the floating bar is for. */
+const BAR_TOOLS: readonly ToolId[] = ["pen", "marker", "shape"];
+
 export class Toolbar {
   readonly el: HTMLElement;
   private toolButtons = new Map<string, HTMLButtonElement>();
@@ -114,8 +117,8 @@ export class Toolbar {
             Popover.closeAll();
             return;
           }
-          const tool = this.surface.tools.tool === "marker" ? "marker" : "pen";
-          this.openOptions(tool, anchor);
+          const t = this.surface.tools.tool;
+          this.openOptions(t === "marker" || t === "shape" ? t : "pen", anchor, this.penBar?.popSide());
         },
         moved: (pos) => {
           this.surface.setSettings({ penBarPos: pos });
@@ -135,23 +138,22 @@ export class Toolbar {
           this.host.settingsChanged({ penColors });
           this.penBar?.refresh();
         },
-        defaultTop: () => {
-          // just under a top toolbar; near the top of the page otherwise
+        area: () => {
+          // the page area (the view without the toolbar), in the view's pixels
           const host = parent.getBoundingClientRect();
-          const bar = this.el.getBoundingClientRect();
-          return this.position === "top" ? bar.bottom - host.top + 8 : 8;
+          const page = this.surface.el.getBoundingClientRect();
+          return { x: page.left - host.left, y: page.top - host.top, w: page.width, h: page.height };
         },
       });
     }
     return this.penBar;
   }
 
-  /** The pen bar goes with the pen and the highlighter, and with its setting. */
+  /** The floating bar goes with the pen, the highlighter and the shapes, and with its setting. */
   private refreshPenBar(): void {
     const bar = this.penBar;
     if (!bar) return;
-    const t = this.surface.tools.tool;
-    if (!this.surface.settings.penBar || (t !== "pen" && t !== "marker")) bar.hide();
+    if (!this.surface.settings.penBar || !BAR_TOOLS.includes(this.surface.tools.tool)) bar.hide();
     else {
       bar.refresh();
       bar.place();
@@ -526,8 +528,8 @@ export class Toolbar {
       Popover.closeAll();
       if (same) return;
     }
-    // the floating pen bar: the pen and the highlighter open it, tapping them again hides it
-    if ((id === "pen" || id === "marker") && this.surface.settings.penBar) {
+    // the floating bar: the pen, the highlighter and the shapes open it, tapping them again hides it
+    if (BAR_TOOLS.includes(id) && this.surface.settings.penBar) {
       const bar = this.getPenBar();
       if (!wasActive) {
         this.setTools({ tool: id });
@@ -554,18 +556,19 @@ export class Toolbar {
     pop.place(this.side());
   }
 
-  private openOptions(id: ToolId, anchor: HTMLButtonElement): void {
+  /** A tool's options card; `side` is where it opens (from the floating bar: away from its edge). */
+  private openOptions(id: ToolId, anchor: HTMLButtonElement, side = this.side()): void {
     const host = this.el.parentElement ?? this.el;
     const pop = new Popover(host, anchor, `ink-pop-${id}`);
     const render = () => {
       pop.el.replaceChildren();
       this.fillOptions(id, pop.el, () => {
         render();
-        pop.place(this.side());
+        pop.place(side);
       }, () => pop.close());
     };
     render();
-    pop.place(this.side());
+    pop.place(side);
   }
 
   private fillOptions(id: ToolId, root: HTMLElement, rerender: () => void, close: () => void): void {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { addColor, colorName, DEFAULT_PEN_PALETTE, loadPalette, MAX_PALETTE, normalizeColor, removeColor } from "../src/core/palette";
+import { addColor, colorName, DEFAULT_PEN_PALETTE, loadPalette, MAX_PALETTE, moveColor, normalizeColor, removeColor } from "../src/core/palette";
+import { hexToHsv, hsvToHex } from "../src/core/color";
 import { PENS, spreadPresets } from "../src/core/ink/pens";
 import { loadSettings } from "../src/settings";
 
@@ -64,5 +65,41 @@ describe("thicknesses in the pen bar", () => {
     expect(loadSettings({ penBarSizes: 3 }).penBarSizes).toBe(3);
     expect(loadSettings({ penBarSizes: 0 }).penBarSizes).toBe(1);
     expect(loadSettings({ penBarSizes: 12 }).penBarSizes).toBe(5);
+  });
+});
+
+describe("moving colours", () => {
+  const p = ["#000000", "#d32f2f", "#1565c0", "#2e7d32"];
+
+  it("moves a colour to another place", () => {
+    expect(moveColor(p, 0, 2)).toEqual(["#d32f2f", "#1565c0", "#000000", "#2e7d32"]);
+    expect(moveColor(p, 3, 0)).toEqual(["#2e7d32", "#000000", "#d32f2f", "#1565c0"]);
+  });
+
+  it("changes nothing for the same place or places that are not there", () => {
+    expect(moveColor(p, 1, 1)).toEqual(p);
+    expect(moveColor(p, -1, 2)).toEqual(p);
+    expect(moveColor(p, 1, 9)).toEqual(p);
+  });
+});
+
+describe("colour picker maths", () => {
+  it("goes from hue/saturation/brightness to a colour code and back", () => {
+    expect(hsvToHex({ h: 0, s: 1, v: 1 })).toBe("#ff0000");
+    expect(hsvToHex({ h: 120, s: 1, v: 1 })).toBe("#00ff00");
+    expect(hsvToHex({ h: 240, s: 1, v: 0.5 })).toBe("#000080");
+    expect(hsvToHex({ h: 0, s: 0, v: 1 })).toBe("#ffffff");
+    expect(hsvToHex({ h: 0, s: 0, v: 0 })).toBe("#000000");
+    for (const c of ["#3a7bd5", "#d32f2f", "#00897b", "#bdbdbd", "#6a1b9a"]) {
+      const hsv = hexToHsv(c);
+      expect(hsv).not.toBeNull();
+      expect(hsvToHex(hsv as NonNullable<typeof hsv>)).toBe(c);
+    }
+  });
+
+  it("keeps values in range and rejects what is not a colour", () => {
+    expect(hsvToHex({ h: 720, s: 2, v: -1 })).toBe("#000000");
+    expect(hsvToHex({ h: -120, s: 1, v: 1 })).toBe("#0000ff");
+    expect(hexToHsv("blue")).toBeNull();
   });
 });

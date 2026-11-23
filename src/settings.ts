@@ -2,6 +2,7 @@ import { DEFAULT_PAPER, isPaperStyle, normalizePaperSpec, type PaperSpec } from 
 import { cleanSubfolder } from "./core/folders";
 import { LINE_STYLES, PENS, WRITING_PEN_TYPES } from "./core/ink/pens";
 import { DEFAULT_PEN_PALETTE, loadPalette } from "./core/palette";
+import type { Dock, PanelPos } from "./core/panelPosition";
 import { FILL_STYLES, PEN_TYPES } from "./core/ink/model";
 import { SHAPES, type ShapeKind } from "./core/ink/shapes";
 import { DEFAULT_TOOL_STATE, MAX_FAVORITES, MIN_FAVORITES, type FitMode, type PenButtonAction, type ToolState, type WritingPen } from "./ink/types";
@@ -87,7 +88,7 @@ export interface InkSettings {
   /** Tapping the pen or highlighter opens the floating pen bar. */
   penBar: boolean;
   /** Where the pen bar was moved to (fractions of the view), or null for its place under the toolbar. */
-  penBarPos: { x: number; y: number } | null;
+  penBarPos: PanelPos | null;
   /** The pen bar's colours (your own: added with the colour picker, removed by holding one). */
   penColors: string[];
   /** How many thicknesses the pen bar shows (1–5). */
@@ -200,13 +201,15 @@ function loadHiddenPens(value: unknown): WritingPen[] {
   return hidden.length >= WRITING_PEN_TYPES.length ? [] : hidden;
 }
 
-/** A stored pen bar position: both fractions in 0–1, or null. */
-function loadPenBarPos(value: unknown): { x: number; y: number } | null {
+/** A stored pen bar position: both fractions in 0–1 (and the edge it is docked at), or null. */
+function loadPenBarPos(value: unknown): PanelPos | null {
   if (!value || typeof value !== "object") return null;
   const v = value as Record<string, unknown>;
   const ok = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
   if (!ok(v.x) || !ok(v.y)) return null;
-  return { x: Math.min(1, Math.max(0, v.x)), y: Math.min(1, Math.max(0, v.y)) };
+  const pos = { x: Math.min(1, Math.max(0, v.x)), y: Math.min(1, Math.max(0, v.y)) };
+  const docks: readonly Dock[] = ["left", "right", "top", "bottom"];
+  return docks.includes(v.dock as Dock) ? { ...pos, dock: v.dock as Dock } : pos;
 }
 
 function bool(value: unknown, fallback: boolean): boolean {

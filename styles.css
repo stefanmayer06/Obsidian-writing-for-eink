@@ -902,9 +902,99 @@ body.ink-eink .ink-penbar,
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior: contain;
-  scroll-snap-type: x proximity;
   scrollbar-width: none;
-  touch-action: pan-x;
+  /* the strip scrolls itself: a press may also be a hold that lifts a colour to move it */
+  touch-action: none;
+}
+
+/* a colour held to be moved (or removed) */
+.ink-penbar button.ink-penbar-swatch.is-lifted {
+  transform: scale(1.25);
+  outline: 3px dashed var(--text-normal);
+  outline-offset: 3px;
+  z-index: 1;
+}
+
+.ink-penbar-colors.is-reordering {
+  cursor: grabbing;
+}
+
+/* dragged near an edge: it will dock there */
+.ink-penbar.is-snapping {
+  outline: 3px dashed var(--text-normal);
+  outline-offset: 4px;
+}
+
+/* shapes: the fill of new shapes, shown under the bucket */
+.ink-penbar .ink-btn.ink-penbar-btn.ink-penbar-fill {
+  position: relative;
+}
+
+.ink-penbar .ink-penbar-fill::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 5px;
+  height: 5px;
+  border: 1px solid var(--text-normal);
+  border-radius: 3px;
+  background: var(--swatch, transparent);
+}
+
+.ink-penbar .ink-penbar-fill.is-empty::after {
+  background: linear-gradient(to top right, transparent 45%, var(--text-normal) 45%, var(--text-normal) 55%, transparent 55%);
+}
+
+/* ---------- docked on the left or right: upright ---------- */
+
+.ink-penbar.is-vertical {
+  flex-direction: column;
+  max-width: none;
+  max-height: calc(100% - 16px);
+  padding: 2px 4px 6px;
+  /* on a very short screen the bar scrolls (the colour strip has given way already) */
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.ink-penbar.is-vertical .ink-btn.ink-penbar-btn {
+  height: 40px;
+}
+
+.ink-penbar.is-vertical .ink-penbar-grip {
+  width: 44px;
+  height: 26px;
+}
+
+.ink-penbar.is-vertical .ink-penbar-group {
+  flex-direction: column;
+  padding: 0 0 6px;
+  border-right: none;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.ink-penbar.is-vertical .ink-btn.ink-penbar-btn.ink-penbar-size,
+.ink-penbar.is-vertical .ink-btn.ink-penbar-btn.ink-linestyle-btn {
+  width: 44px;
+  height: 30px;
+}
+
+/* the groups and the "+" keep their size; only the colour strip shrinks */
+.ink-penbar.is-vertical > :not(.ink-penbar-colors) {
+  flex-shrink: 0;
+}
+
+.ink-penbar.is-vertical .ink-penbar-colors {
+  flex-direction: column;
+  min-width: 0;
+  min-height: 90px;
+  max-width: none;
+  max-height: calc(4.5 * 34px + 4 * 8px + 12px);
+  padding: 6px 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .ink-penbar-colors::-webkit-scrollbar {
@@ -933,16 +1023,77 @@ body.ink-eink .ink-penbar,
   scroll-snap-align: start;
 }
 
-/* the colour picker's input: out of sight, but there for the system's picker to open from */
-.ink-penbar input.ink-penbar-picker {
+/* ---------- Colour picker ------------------------------------------------ */
+
+.ink-popover.ink-pop-colorpicker {
+  width: min(320px, calc(100% - 12px));
+}
+
+.ink-colorpicker {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* saturation left to right, brightness top to bottom, over the hue */
+.ink-cp-sv {
+  position: relative;
+  height: 170px;
+  border: 2px solid var(--text-normal);
+  border-radius: 10px;
+  background:
+    linear-gradient(to top, #000, rgba(0, 0, 0, 0)),
+    linear-gradient(to right, #fff, rgba(255, 255, 255, 0)),
+    var(--cp-hue, #f00);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.ink-cp-hue {
+  position: relative;
+  height: 28px;
+  border: 2px solid var(--text-normal);
+  border-radius: 14px;
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.ink-cp-thumb {
   position: absolute;
-  bottom: 0;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  border: 0;
-  opacity: 0;
+  width: 22px;
+  height: 22px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  outline: 2px solid #000;
+  transform: translate(-50%, -50%);
   pointer-events: none;
+}
+
+.ink-cp-hue .ink-cp-thumb {
+  top: 50%;
+}
+
+.ink-cp-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ink-cp-preview {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: 2px solid var(--text-normal);
+  border-radius: 50%;
+}
+
+.ink-popover input.ink-cp-code {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  font-family: var(--font-monospace, monospace);
+  font-size: 16px;
 }
 
 .ink-penbar button.ink-penbar-swatch.is-active {

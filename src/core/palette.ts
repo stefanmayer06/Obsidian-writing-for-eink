@@ -49,6 +49,15 @@ export function removeColor(palette: readonly string[], color: string): string[]
   return out.length > 0 ? out : [...palette];
 }
 
+/** The palette with the colour at `from` moved to `to` (indices; out-of-range ones change nothing). */
+export function moveColor(palette: readonly string[], from: number, to: number): string[] {
+  const out = [...palette];
+  if (from < 0 || from >= out.length || to < 0 || to >= out.length || from === to) return out;
+  const [c] = out.splice(from, 1);
+  out.splice(to, 0, c);
+  return out;
+}
+
 /** A colour's name when it is one of the built-in ones, otherwise its code ("#3a7bd5"). */
 export function colorName(color: string): string {
   const c = color.toLowerCase();
